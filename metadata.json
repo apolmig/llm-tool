@@ -1,0 +1,5 @@
+{
+  "name": "CiudadanIA",
+  "description": "A professional-grade text summarization testing ground. Compare models, tune parameters, and customize system instructions to generate structured summaries from text or files.",
+  "requestFramePermissions": []
+}
