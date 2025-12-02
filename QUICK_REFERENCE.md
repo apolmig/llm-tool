@@ -61,6 +61,8 @@
 | CSV | Comma-separated values | ✅ Enhanced |
 | XLSX/XLS | Excel spreadsheets | ✅ **NEW** |
 | MD | Markdown documents | ✅ **NEW** |
+| PDF | Portable Document Format | ✅ **NEW** |
+| DOCX | Word Documents | ✅ **NEW** |
 | JSON | JavaScript Object Notation | ✅ Existing |
 | TXT | Plain text files | ✅ Existing |
 
@@ -174,15 +176,15 @@ All features have been **tested and verified**:
 - **Re-run**: Click "Reset & Re-run" after processing
 - **Clear**: Click "Clear All" to start fresh
 - **Upload More**: Click "Add More" or drag files
-- **Export**: Use "Export JSONL" in results panel
+- **Export**: Use "Export JSONL", "Export CSV", or "Export Excel" in results panel
 
 ---
 
 ## What's Next (Optional Enhancements)
 
 Future improvements could include:
-- [ ] PDF file support
-- [ ] DOCX file support
+- [x] PDF file support
+- [x] DOCX file support
 - [ ] Progress bars for large batches
 - [ ] Pause/resume batch processing
 - [ ] Batch templates/presets

@@ -1,8 +1,9 @@
 
 import React, { useState, useMemo } from 'react';
+import * as XLSX from 'xlsx';
 import { BatchItem, AppConfig } from '../types';
 import ReactMarkdown from 'react-markdown';
-import { Star, Download, ChevronDown, ChevronRight, MessageSquare, FileJson, Check, Search, X, Target, ArrowUpDown, Settings } from 'lucide-react';
+import { Star, Download, ChevronDown, ChevronRight, MessageSquare, FileJson, Check, Search, X, Target, ArrowUpDown, Settings, FileSpreadsheet } from 'lucide-react';
 
 interface BatchResultsProps {
     items: BatchItem[];
@@ -58,12 +59,13 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
 
         try {
             // Improved judge prompt with stricter scoring guidance
+            const criteriaText = config.judgeCriteria.map((c, idx) =>
+                `${idx + 1}. ${c.name} (${c.weight}%) - ${c.description}`
+            ).join('\n');
+
             const judgePrompt = `You are an expert evaluator of text summaries. Evaluate the following summary using these criteria:
 
-1. ACCURACY (30%) - Does it capture key information without errors?
-2. CLARITY (25%) - Is it easy to understand and well-structured?
-3. CONCISENESS (25%) - Is it appropriately concise without unnecessary details?
-4. COMPLETENESS (20%) - Does it cover all important points?
+${criteriaText}
 
 Original Text:
 ${item.sourceText}
@@ -278,6 +280,67 @@ Explanation: [brief 2-3 sentence explanation]`;
         } catch (error) {
             console.error('Error exporting JSONL:', error);
             alert('Failed to export JSONL file. Check console for details.');
+        }
+    };
+
+    const exportExcel = () => {
+        try {
+            // Prepare data for Excel
+            const data: any[] = [];
+
+            items.forEach((item, idx) => {
+                const row: any = {
+                    'ID': idx + 1,
+                    'Title': item.title || '',
+                    'Source Text': item.sourceText
+                };
+
+                config.activeRunConfigs.forEach(configId => {
+                    const runConfig = config.runConfigurations.find(c => c.id === configId);
+                    if (runConfig) {
+                        const output = item.results[configId] || '';
+                        const evaluation = item.evaluations[configId] || { score: '', note: '', isGroundTruth: false };
+
+                        row[`${runConfig.name} - Output`] = output;
+                        row[`${runConfig.name} - Score`] = evaluation.score || '';
+                        row[`${runConfig.name} - Ground Truth`] = evaluation.isGroundTruth ? 'Yes' : 'No';
+                        row[`${runConfig.name} - Notes`] = evaluation.note || '';
+                    }
+                });
+
+                data.push(row);
+            });
+
+            // Create workbook and worksheet
+            const wb = XLSX.utils.book_new();
+            const ws = XLSX.utils.json_to_sheet(data);
+
+            // Auto-width for columns (heuristic)
+            const colWidths = [
+                { wch: 5 },  // ID
+                { wch: 20 }, // Title
+                { wch: 50 }, // Source Text
+            ];
+
+            // Add widths for config columns
+            config.activeRunConfigs.forEach(() => {
+                colWidths.push({ wch: 50 }); // Output
+                colWidths.push({ wch: 8 });  // Score
+                colWidths.push({ wch: 12 }); // GT
+                colWidths.push({ wch: 20 }); // Notes
+            });
+
+            ws['!cols'] = colWidths;
+
+            XLSX.utils.book_append_sheet(wb, ws, "Batch Results");
+
+            // Write file
+            XLSX.writeFile(wb, `batch_results_${new Date().toISOString().replace(/[:.]/g, '-')}.xlsx`);
+
+            console.log(`Exported ${items.length} items to Excel`);
+        } catch (error) {
+            console.error('Error exporting Excel:', error);
+            alert('Failed to export Excel file. Check console for details.');
         }
     };
 
@@ -503,8 +566,8 @@ Explanation: [brief 2-3 sentence explanation]`;
                             onClick={judgeAllItems}
                             disabled={isBatchJudging || items.length === 0}
                             className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors border whitespace-nowrap ${isBatchJudging
-                                    ? 'bg-purple-500/20 text-purple-300 border-purple-500/30 cursor-wait'
-                                    : 'bg-slate-800 hover:bg-slate-700 text-purple-300 border-slate-700'
+                                ? 'bg-purple-500/20 text-purple-300 border-purple-500/30 cursor-wait'
+                                : 'bg-slate-800 hover:bg-slate-700 text-purple-300 border-slate-700'
                                 }`}
                             title="Use LLM to judge all results automatically"
                         >
@@ -530,6 +593,14 @@ Explanation: [brief 2-3 sentence explanation]`;
                         >
                             <FileJson size={14} />
                             <span className="hidden sm:inline">JSONL</span>
+                        </button>
+                        <button
+                            onClick={exportExcel}
+                            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-green-300 px-3 py-2 rounded-lg text-xs font-medium transition-colors border border-slate-700 whitespace-nowrap"
+                            title="Export all data as Excel spreadsheet"
+                        >
+                            <FileSpreadsheet size={14} />
+                            <span className="hidden sm:inline">Excel</span>
                         </button>
                         <button
                             onClick={exportCSV}
@@ -647,91 +718,91 @@ Explanation: [brief 2-3 sentence explanation]`;
                                                                             </button>
                                                                         </div>
                                                                     </div>
-                                                                    ) : (
-                                                                    <div className="h-full flex items-center justify-center">
-                                                                        <span className="w-2 h-2 bg-slate-700 rounded-full animate-pulse"></span>
-                                                                    </div>
+                                                                </div>
+                                                            ) : (
+                                                                <div className="h-full flex items-center justify-center">
+                                                                    <span className="w-2 h-2 bg-slate-700 rounded-full animate-pulse"></span>
+                                                                </div>
                                                             )}
-                                                                </td>
-                                                            );
+                                                        </td>
+                                                    );
                                                 })}
-                                                        </tr>
+                                            </tr>
+                                            {/* Expanded Detail Row */}
+                                            {
+                                                expandedRow === item.id && (
+                                                    <tr className="bg-slate-900/20">
+                                                        <td colSpan={2 + sortedConfigs.filter(c => visibleColumns.includes(c.id)).length} className="px-4 py-4">
+                                                            <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
+                                                                <div className="mb-4">
+                                                                    <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Full Source Text</h4>
+                                                                    {item.title && <h5 className="text-sm font-bold text-slate-300 mb-1">{item.title}</h5>}
+                                                                    <div className="bg-slate-900 p-3 rounded text-sm text-slate-300 font-mono whitespace-pre-wrap border border-slate-800">
+                                                                        {item.sourceText}
+                                                                    </div>
+                                                                </div>
 
-                                            {/* Expanded Detail Row */ }
-                                                    {
-                                                        expandedRow === item.id && (
-                                                            <tr className="bg-slate-900/20">
-                                                                <td colSpan={2 + sortedConfigs.filter(c => visibleColumns.includes(c.id)).length} className="px-4 py-4">
-                                                                    <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
-                                                                        <div className="mb-4">
-                                                                            <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Full Source Text</h4>
-                                                                            {item.title && <h5 className="text-sm font-bold text-slate-300 mb-1">{item.title}</h5>}
-                                                                            <div className="bg-slate-900 p-3 rounded text-sm text-slate-300 font-mono whitespace-pre-wrap border border-slate-800">
-                                                                                {item.sourceText}
-                                                                            </div>
-                                                                        </div>
+                                                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                                                    {sortedConfigs.filter(c => visibleColumns.includes(c.id)).map(conf => {
+                                                                        const evalData = item.evaluations[conf.id] || { score: 0, note: '', isGroundTruth: false };
+                                                                        return (
+                                                                            <div key={conf.id} className={`border rounded-lg p-4 ${evalData.isGroundTruth ? 'border-yellow-500/30 bg-yellow-500/5' : 'border-slate-800 bg-slate-900/50'}`}>
+                                                                                <div className="flex justify-between items-center mb-3 border-b border-slate-800 pb-2">
+                                                                                    <div>
+                                                                                        <span className="text-sm font-bold text-indigo-300 block">{conf.name}</span>
+                                                                                        <span className="text-[10px] text-slate-500 font-mono">{conf.model}</span>
+                                                                                    </div>
+                                                                                    <div className="flex items-center gap-2">
+                                                                                        {evalData.isGroundTruth && <span className="text-[10px] bg-yellow-500/20 text-yellow-300 px-2 py-0.5 rounded border border-yellow-500/30">GROUND TRUTH</span>}
+                                                                                        <button
+                                                                                            onClick={() => onUpdateEvaluation(item.id, conf.id, 'isGroundTruth', !evalData.isGroundTruth)}
+                                                                                            className={`p-1 rounded transition-colors ${evalData.isGroundTruth ? 'text-yellow-400 bg-yellow-400/10' : 'text-slate-600 hover:text-slate-400'}`}
+                                                                                            title={evalData.isGroundTruth ? "Unmark Ground Truth" : "Mark as Ground Truth"}
+                                                                                        >
+                                                                                            <Star size={16} fill={evalData.isGroundTruth ? "currentColor" : "none"} />
+                                                                                        </button>
+                                                                                    </div>
+                                                                                </div>
+                                                                                <div className="prose prose-invert prose-sm max-w-none mb-4">
+                                                                                    <ReactMarkdown>{item.results[conf.id] || ''}</ReactMarkdown>
+                                                                                </div>
 
-                                                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                                                                            {sortedConfigs.filter(c => visibleColumns.includes(c.id)).map(conf => {
-                                                                                const evalData = item.evaluations[conf.id] || { score: 0, note: '', isGroundTruth: false };
-                                                                                return (
-                                                                                    <div key={conf.id} className={`border rounded-lg p-4 ${evalData.isGroundTruth ? 'border-yellow-500/30 bg-yellow-500/5' : 'border-slate-800 bg-slate-900/50'}`}>
-                                                                                        <div className="flex justify-between items-center mb-3 border-b border-slate-800 pb-2">
-                                                                                            <div>
-                                                                                                <span className="text-sm font-bold text-indigo-300 block">{conf.name}</span>
-                                                                                                <span className="text-[10px] text-slate-500 font-mono">{conf.model}</span>
-                                                                                            </div>
-                                                                                            <div className="flex items-center gap-2">
-                                                                                                {evalData.isGroundTruth && <span className="text-[10px] bg-yellow-500/20 text-yellow-300 px-2 py-0.5 rounded border border-yellow-500/30">GROUND TRUTH</span>}
-                                                                                                <button
-                                                                                                    onClick={() => onUpdateEvaluation(item.id, conf.id, 'isGroundTruth', !evalData.isGroundTruth)}
-                                                                                                    className={`p-1 rounded transition-colors ${evalData.isGroundTruth ? 'text-yellow-400 bg-yellow-400/10' : 'text-slate-600 hover:text-slate-400'}`}
-                                                                                                    title={evalData.isGroundTruth ? "Unmark Ground Truth" : "Mark as Ground Truth"}
-                                                                                                >
-                                                                                                    <Star size={16} fill={evalData.isGroundTruth ? "currentColor" : "none"} />
-                                                                                                </button>
-                                                                                            </div>
-                                                                                        </div>
-                                                                                        <div className="prose prose-invert prose-sm max-w-none mb-4">
-                                                                                            <ReactMarkdown>{item.results[conf.id] || ''}</ReactMarkdown>
-                                                                                        </div>
-
-                                                                                        <div className="space-y-2 pt-3 border-t border-slate-800/50">
-                                                                                            <div className="flex gap-4">
-                                                                                                <div className="flex-1">
-                                                                                                    <label className="block text-[10px] text-slate-500 uppercase font-bold mb-1">Evaluator Score (1-10)</label>
-                                                                                                    <input
-                                                                                                        type="range" min="1" max="10"
-                                                                                                        value={evalData.score || 1}
-                                                                                                        onChange={(e) => onUpdateEvaluation(item.id, conf.id, 'score', validateScore(parseInt(e.target.value)))}
-                                                                                                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                                                                                                    />
-                                                                                                    <div className="flex justify-between text-[10px] text-slate-500 mt-1">
-                                                                                                        <span>1</span>
-                                                                                                        <span className="text-indigo-300 font-bold text-sm">{evalData.score || '-'}</span>
-                                                                                                        <span>10</span>
-                                                                                                    </div>
-                                                                                                </div>
-                                                                                            </div>
-                                                                                            <div>
-                                                                                                <label className="block text-[10px] text-slate-500 uppercase font-bold mb-1">Notes / Corrections</label>
-                                                                                                <textarea
-                                                                                                    value={evalData.note || ''}
-                                                                                                    onChange={(e) => onUpdateEvaluation(item.id, conf.id, 'note', e.target.value)}
-                                                                                                    placeholder="Add comments or improved phrasing..."
-                                                                                                    className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-slate-300 focus:ring-1 focus:ring-indigo-500 min-h-[60px]"
-                                                                                                />
+                                                                                <div className="space-y-2 pt-3 border-t border-slate-800/50">
+                                                                                    <div className="flex gap-4">
+                                                                                        <div className="flex-1">
+                                                                                            <label className="block text-[10px] text-slate-500 uppercase font-bold mb-1">Evaluator Score (1-10)</label>
+                                                                                            <input
+                                                                                                type="range" min="1" max="10"
+                                                                                                value={evalData.score || 1}
+                                                                                                onChange={(e) => onUpdateEvaluation(item.id, conf.id, 'score', validateScore(parseInt(e.target.value)))}
+                                                                                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                                                                                            />
+                                                                                            <div className="flex justify-between text-[10px] text-slate-500 mt-1">
+                                                                                                <span>1</span>
+                                                                                                <span className="text-indigo-300 font-bold text-sm">{evalData.score || '-'}</span>
+                                                                                                <span>10</span>
                                                                                             </div>
                                                                                         </div>
                                                                                     </div>
-                                                                                );
-                                                                            })}
-                                                                        </div>
-                                                                    </div>
-                                                                </td>
-                                                            </tr>
-                                                        )
-                                                    }
+                                                                                    <div>
+                                                                                        <label className="block text-[10px] text-slate-500 uppercase font-bold mb-1">Notes / Corrections</label>
+                                                                                        <textarea
+                                                                                            value={evalData.note || ''}
+                                                                                            onChange={(e) => onUpdateEvaluation(item.id, conf.id, 'note', e.target.value)}
+                                                                                            placeholder="Add comments or improved phrasing..."
+                                                                                            className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-slate-300 focus:ring-1 focus:ring-indigo-500 min-h-[60px]"
+                                                                                        />
+                                                                                    </div>
+                                                                                </div>
+                                                                            </div>
+                                                                        );
+                                                                    })}
+                                                                </div>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                )
+                                            }
                                         </React.Fragment>
                                     ))
                                 ) : (

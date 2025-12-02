@@ -637,6 +637,107 @@ const Sidebar: React.FC<SidebarProps> = ({
                       </div>
                     </div>
                   )}
+
+
+                  {/* Judge Criteria Editor */}
+                  <div className="space-y-3 p-3 bg-slate-800/30 border border-slate-700 rounded-lg mt-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-[10px] uppercase font-bold text-slate-400 flex items-center gap-1">
+                        <Sliders size={12} />
+                        Evaluation Criteria
+                      </div>
+                      <button
+                        onClick={() => {
+                          const newId = crypto.randomUUID();
+                          setConfig(prev => ({
+                            ...prev,
+                            judgeCriteria: [
+                              ...prev.judgeCriteria,
+                              { id: newId, name: 'NEW CRITERIA', weight: 10, description: 'Description...' }
+                            ]
+                          }));
+                        }}
+                        className="text-[10px] bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-0.5 rounded transition-colors"
+                      >
+                        + Add
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      {config.judgeCriteria.map((criterion) => (
+                        <div key={criterion.id} className="bg-slate-900 p-2 rounded border border-slate-800 group">
+                          <div className="flex items-center gap-2 mb-1">
+                            <input
+                              type="text"
+                              value={criterion.name}
+                              onChange={(e) => {
+                                setConfig(prev => ({
+                                  ...prev,
+                                  judgeCriteria: prev.judgeCriteria.map(c =>
+                                    c.id === criterion.id ? { ...c, name: e.target.value } : c
+                                  )
+                                }));
+                              }}
+                              className="flex-1 bg-transparent text-xs font-bold text-slate-300 outline-none border-b border-transparent focus:border-indigo-500"
+                              placeholder="CRITERIA NAME"
+                            />
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                value={criterion.weight}
+                                onChange={(e) => {
+                                  setConfig(prev => ({
+                                    ...prev,
+                                    judgeCriteria: prev.judgeCriteria.map(c =>
+                                      c.id === criterion.id ? { ...c, weight: parseInt(e.target.value) || 0 } : c
+                                    )
+                                  }));
+                                }}
+                                className="w-8 bg-slate-800 text-[10px] text-right text-indigo-300 rounded px-1 outline-none focus:ring-1 focus:ring-indigo-500"
+                              />
+                              <span className="text-[10px] text-slate-500">%</span>
+                            </div>
+                            <button
+                              onClick={() => {
+                                setConfig(prev => ({
+                                  ...prev,
+                                  judgeCriteria: prev.judgeCriteria.filter(c => c.id !== criterion.id)
+                                }));
+                              }}
+                              className="text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                          <input
+                            type="text"
+                            value={criterion.description}
+                            onChange={(e) => {
+                              setConfig(prev => ({
+                                ...prev,
+                                judgeCriteria: prev.judgeCriteria.map(c =>
+                                  c.id === criterion.id ? { ...c, description: e.target.value } : c
+                                )
+                              }));
+                            }}
+                            className="w-full bg-transparent text-[10px] text-slate-500 outline-none border-b border-transparent focus:border-slate-600 placeholder-slate-700"
+                            placeholder="Description of what to evaluate..."
+                          />
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Total Weight Indicator */}
+                    <div className="flex justify-between items-center px-1">
+                      <span className="text-[10px] text-slate-500">Total Weight</span>
+                      <span className={`text-[10px] font-bold ${config.judgeCriteria.reduce((sum, c) => sum + c.weight, 0) === 100
+                        ? 'text-emerald-400'
+                        : 'text-amber-400'
+                        }`}>
+                        {config.judgeCriteria.reduce((sum, c) => sum + c.weight, 0)}%
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

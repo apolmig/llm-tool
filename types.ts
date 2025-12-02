@@ -44,6 +44,14 @@ export interface AppConfig {
   judgeProvider: ModelProvider;
   judgeModel: string;
   useMainModelAsJudge: boolean;
+  judgeCriteria: JudgeCriteria[];
+}
+
+export interface JudgeCriteria {
+  id: string;
+  name: string;
+  weight: number; // percentage (0-100)
+  description: string;
 }
 
 export interface RunConfiguration {

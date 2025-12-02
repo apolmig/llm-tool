@@ -27,7 +27,13 @@ const DEFAULT_CONFIG: AppConfig = {
   // LLM Judge defaults
   judgeProvider: 'local',
   judgeModel: '',
-  useMainModelAsJudge: true
+  useMainModelAsJudge: true,
+  judgeCriteria: [
+    { id: '1', name: 'ACCURACY', weight: 30, description: 'Does it capture key information without errors?' },
+    { id: '2', name: 'CLARITY', weight: 25, description: 'Is it easy to understand and well-structured?' },
+    { id: '3', name: 'CONCISENESS', weight: 25, description: 'Is it appropriately concise without unnecessary details?' },
+    { id: '4', name: 'COMPLETENESS', weight: 20, description: 'Does it cover all important points?' },
+  ]
 };
 
 const App: React.FC = () => {

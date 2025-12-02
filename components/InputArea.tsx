@@ -1,8 +1,13 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Upload, FileText, X, ClipboardPaste, Database, Play, Layers, Check } from 'lucide-react';
 import { BatchItem, ViewMode } from '../types';
 import * as XLSX from 'xlsx';
+import mammoth from 'mammoth';
+import * as pdfjsLib from 'pdfjs-dist';
+
+// Set worker source for PDF.js
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 interface InputAreaProps {
     text: string;
@@ -62,6 +67,10 @@ const InputArea: React.FC<InputAreaProps> = ({
 
                     if (lowerName.endsWith('.xlsx') || lowerName.endsWith('.xls')) {
                         items = await parseExcel(file);
+                    } else if (lowerName.endsWith('.docx')) {
+                        items = await parseDocx(file);
+                    } else if (lowerName.endsWith('.pdf')) {
+                        items = await parsePdf(file);
                     } else {
                         const content = await readFile(file);
                         items = parseBatchFileContent(content, file.name);
@@ -76,7 +85,6 @@ const InputArea: React.FC<InputAreaProps> = ({
             if (allNewItems.length > 0) {
                 setBatchItems(prev => [...prev, ...allNewItems]);
             } else {
-                // If we processed files but got no items, warn the user
                 if (files.length > 0) alert("No valid text entries found in the uploaded files.");
             }
         } else {
@@ -84,14 +92,26 @@ const InputArea: React.FC<InputAreaProps> = ({
             if (files.length > 0) {
                 const file = files[0];
                 const lowerName = file.name.toLowerCase();
-                if (lowerName.endsWith('.xlsx') || lowerName.endsWith('.xls')) {
-                    // For playground, maybe just extract text from first cell/row? 
-                    // Or just alert not supported. Let's try to extract first text found.
-                    const items = await parseExcel(file);
-                    if (items.length > 0) setText(items[0].sourceText);
-                } else {
-                    const content = await readFile(file);
-                    setText(content);
+                let content = '';
+
+                try {
+                    if (lowerName.endsWith('.xlsx') || lowerName.endsWith('.xls')) {
+                        const items = await parseExcel(file);
+                        if (items.length > 0) content = items[0].sourceText;
+                    } else if (lowerName.endsWith('.docx')) {
+                        const items = await parseDocx(file);
+                        if (items.length > 0) content = items[0].sourceText;
+                    } else if (lowerName.endsWith('.pdf')) {
+                        const items = await parsePdf(file);
+                        if (items.length > 0) content = items[0].sourceText;
+                    } else {
+                        content = await readFile(file);
+                    }
+
+                    if (content) setText(content);
+                } catch (err) {
+                    console.error("Error parsing file for playground:", err);
+                    alert("Failed to parse file content.");
                 }
             }
         }
@@ -104,6 +124,63 @@ const InputArea: React.FC<InputAreaProps> = ({
             reader.onerror = (e) => reject(e);
             reader.readAsText(file);
         });
+    };
+
+    const parseDocx = async (file: File): Promise<BatchItem[]> => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    const arrayBuffer = e.target?.result as ArrayBuffer;
+                    const result = await mammoth.extractRawText({ arrayBuffer });
+                    const text = result.value;
+
+                    // Split by double newlines or some other heuristic if needed
+                    // For now, treat the whole doc as one item unless it's very long or has clear sections
+                    // Let's try to split by "Section" or similar if present, otherwise just one item
+
+                    resolve([{
+                        id: crypto.randomUUID(),
+                        title: file.name.replace(/\.[^/.]+$/, ''),
+                        sourceText: text.trim(),
+                        status: 'pending',
+                        results: {},
+                        evaluations: {}
+                    }]);
+                } catch (err) {
+                    reject(err);
+                }
+            };
+            reader.onerror = reject;
+            reader.readAsArrayBuffer(file);
+        });
+    };
+
+    const parsePdf = async (file: File): Promise<BatchItem[]> => {
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            let fullText = '';
+
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const textContent = await page.getTextContent();
+                const pageText = textContent.items.map((item: any) => item.str).join(' ');
+                fullText += pageText + '\n\n';
+            }
+
+            return [{
+                id: crypto.randomUUID(),
+                title: file.name.replace(/\.[^/.]+$/, ''),
+                sourceText: fullText.trim(),
+                status: 'pending',
+                results: {},
+                evaluations: {}
+            }];
+        } catch (err) {
+            console.error("Error parsing PDF:", err);
+            throw new Error("Failed to parse PDF file");
+        }
     };
 
     const parseExcel = (file: File): Promise<BatchItem[]> => {
@@ -485,7 +562,7 @@ const InputArea: React.FC<InputAreaProps> = ({
                                 </div>
                                 <h3 className="text-lg font-medium text-slate-200">Drag & Drop Dataset(s)</h3>
                                 <p className="text-sm text-slate-500 max-w-xs mx-auto">
-                                    Upload .csv, .xlsx, .json, .md, or .txt files containing multiple text entries to process them in bulk.
+                                    Upload .csv, .xlsx, .docx, .pdf, .json, .md, or .txt files containing multiple text entries to process them in bulk.
                                 </p>
                                 <button
                                     onClick={() => fileInputRef.current?.click()}
@@ -521,7 +598,7 @@ const InputArea: React.FC<InputAreaProps> = ({
                             type="file"
                             ref={fileInputRef}
                             onChange={handleFileChange}
-                            accept=".txt,.csv,.json,.xlsx,.xls,.md"
+                            accept=".txt,.csv,.json,.xlsx,.xls,.md,.docx,.pdf"
                             multiple
                             className="hidden"
                         />
@@ -586,7 +663,7 @@ const InputArea: React.FC<InputAreaProps> = ({
                     value={text}
                     onChange={(e) => setText(e.target.value)}
                     className="flex-1 w-full bg-slate-900/50 border border-slate-700 rounded-xl p-4 text-slate-300 resize-none focus:ring-2 focus:ring-indigo-500/50 outline-none placeholder-slate-600 font-mono text-sm"
-                    placeholder="Paste text here, or drop a .txt/.csv/.md/.xlsx file..."
+                    placeholder="Paste text here, or drop a .txt/.csv/.md/.xlsx/.docx/.pdf file..."
                     onDragEnter={handleDrag}
                 />
 
@@ -631,7 +708,7 @@ const InputArea: React.FC<InputAreaProps> = ({
                         type="file"
                         ref={fileInputRef}
                         onChange={handleFileChange}
-                        accept=".txt,.csv,.md,.json,.xlsx,.xls"
+                        accept=".txt,.csv,.md,.json,.xlsx,.xls,.docx,.pdf"
                         className="hidden"
                     />
                 </div>

@@ -153,3 +153,23 @@ All user-reported issues have been **completely resolved**:
 - ✅ Batches can be cleared (clear button)
 
 The workbench is now production-ready with excellent UX!
+
+---
+
+## New File Format Support (2025-12-02)
+
+### ✅ PDF & DOCX Support
+**Feature**: Added support for uploading `.pdf` and `.docx` files directly to the Workbench.
+
+**Implementation**:
+- **PDF**: Uses `pdfjs-dist` to extract text from all pages.
+- **DOCX**: Uses `mammoth` to extract raw text from Word documents.
+- **Processing**:
+  - Currently treats the entire document as a single batch item.
+  - Future improvement: Split by pages or sections automatically.
+
+**Usage**:
+- Drag and drop PDF or Word files into the Workbench area.
+- Or use the "Browse Files" / "Load File" buttons.
+
+**Status**: 🎉 **All Features Complete & Tested!**
