@@ -55,6 +55,7 @@ const App: React.FC = () => {
 
   // Batch State
   const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
+  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
 
   // History State
   const [history, setHistory] = useState<HistoryItem[]>(() => {
@@ -346,6 +347,7 @@ const App: React.FC = () => {
               viewMode={viewMode}
               batchItems={batchItems}
               setBatchItems={setBatchItems}
+              batchProgress={batchProgress}
             />
           </div>
 

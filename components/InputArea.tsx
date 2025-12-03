@@ -17,6 +17,7 @@ interface InputAreaProps {
     viewMode: ViewMode;
     batchItems: BatchItem[];
     setBatchItems: React.Dispatch<React.SetStateAction<BatchItem[]>>;
+    batchProgress?: { current: number; total: number };
 }
 
 const InputArea: React.FC<InputAreaProps> = ({
@@ -26,7 +27,8 @@ const InputArea: React.FC<InputAreaProps> = ({
     isGenerating,
     viewMode,
     batchItems,
-    setBatchItems
+    setBatchItems,
+    batchProgress
 }) => {
     const [dragActive, setDragActive] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -628,7 +630,9 @@ const InputArea: React.FC<InputAreaProps> = ({
                         {isGenerating ? (
                             <>
                                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                Processing Batch...
+                                {batchProgress && batchProgress.total > 0
+                                    ? `Processing ${batchProgress.current}/${batchProgress.total}...`
+                                    : 'Processing Batch...'}
                             </>
                         ) : !hasPendingItems && batchItems.length > 0 ? (
                             <>

@@ -646,21 +646,42 @@ const Sidebar: React.FC<SidebarProps> = ({
                         <Sliders size={12} />
                         Evaluation Criteria
                       </div>
-                      <button
-                        onClick={() => {
-                          const newId = crypto.randomUUID();
-                          setConfig(prev => ({
-                            ...prev,
-                            judgeCriteria: [
-                              ...prev.judgeCriteria,
-                              { id: newId, name: 'NEW CRITERIA', weight: 10, description: 'Description...' }
-                            ]
-                          }));
-                        }}
-                        className="text-[10px] bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-0.5 rounded transition-colors"
-                      >
-                        + Add
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => {
+                            if (confirm('Reset criteria to defaults?')) {
+                              setConfig(prev => ({
+                                ...prev,
+                                judgeCriteria: [
+                                  { id: '1', name: 'ACCURACY', weight: 30, description: 'Does it capture key information without errors?' },
+                                  { id: '2', name: 'CLARITY', weight: 25, description: 'Is it easy to understand and well-structured?' },
+                                  { id: '3', name: 'CONCISENESS', weight: 25, description: 'Is it appropriately concise without unnecessary details?' },
+                                  { id: '4', name: 'COMPLETENESS', weight: 20, description: 'Does it cover all important points?' },
+                                ]
+                              }));
+                            }
+                          }}
+                          className="text-[10px] text-slate-500 hover:text-slate-300 transition-colors"
+                          title="Reset to defaults"
+                        >
+                          Reset
+                        </button>
+                        <button
+                          onClick={() => {
+                            const newId = crypto.randomUUID();
+                            setConfig(prev => ({
+                              ...prev,
+                              judgeCriteria: [
+                                ...prev.judgeCriteria,
+                                { id: newId, name: 'NEW CRITERIA', weight: 10, description: 'Description...' }
+                              ]
+                            }));
+                          }}
+                          className="text-[10px] bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-0.5 rounded transition-colors"
+                        >
+                          + Add
+                        </button>
+                      </div>
                     </div>
 
                     <div className="space-y-2">
