@@ -2,6 +2,7 @@
 import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { BatchItem, AppConfig } from '../types';
+import { evaluateSummary } from '../services/geminiService';
 import ReactMarkdown from 'react-markdown';
 import { Star, Download, ChevronDown, ChevronRight, MessageSquare, FileJson, Check, Search, X, Target, ArrowUpDown, Settings, FileSpreadsheet } from 'lucide-react';
 
@@ -58,125 +59,24 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
         setJudgingItemId(itemId + '-' + configId);
 
         try {
-            // Improved judge prompt with stricter scoring guidance
-            const criteriaText = config.judgeCriteria.map((c, idx) =>
-                `${idx + 1}. ${c.name} (${c.weight}%) - ${c.description}`
-            ).join('\n');
+            // Determine Judge Configuration
+            const judgeProvider = config.useMainModelAsJudge ? runConfig.provider : config.judgeProvider;
+            const judgeModel = config.useMainModelAsJudge ? runConfig.model : config.judgeModel;
 
-            const judgePrompt = `You are an expert evaluator of text summaries. Evaluate the following summary using these criteria:
-
-${criteriaText}
-
-Original Text:
-${item.sourceText}
-
-Summary to Evaluate:
-${output}
-
-Target Length: ${runConfig.maxWords} words
-Actual Length: ${output.trim().split(/\s+/).filter(Boolean).length} words
-
-Provide a score from 1-10 where:
-- 1-3: Poor (major issues)
-- 4-5: Below average (several issues)
-- 6-7: Good (minor issues)
-- 8-9: Excellent (minimal issues)
-- 10: Perfect (no issues)
-
-You MUST respond in this exact format:
-Score: [single number 1-10]
-Explanation: [brief 2-3 sentence explanation]`;
-
-            // Determine which model to use for judging
-            let judgeProvider: 'local' | 'gemini';
-            let judgeModel: string;
-
-            if (config.useMainModelAsJudge) {
-                // Use the main configuration
-                judgeProvider = config.provider;
-                judgeModel = config.activeModels[0] || 'gemini-2.5-flash';
-            } else {
-                // Use dedicated judge configuration
-                judgeProvider = config.judgeProvider;
-                judgeModel = config.judgeModel || (judgeProvider === 'local' ? '' : 'gemini-2.5-flash');
-            }
-
-            const endpoint = judgeProvider === 'local'
-                ? config.localEndpoint
-                : `https://generativelanguage.googleapis.com/v1beta/models/${judgeModel}:generateContent`;
-
-            let response;
-            let judgeOutput = '';
-
-            if (judgeProvider === 'local') {
-                // Local LLM (LM Studio)
-                response = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        model: judgeModel || runConfig.model,
-                        messages: [
-                            { role: 'system', content: 'You are a strict, objective evaluator of text summaries. Always provide scores between 1-10.' },
-                            { role: 'user', content: judgePrompt }
-                        ],
-                        temperature: 0.2, // Lower temperature for more consistent judging
-                        max_tokens: 500
-                    })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Judge model error: ${response.statusText}`);
-                }
-
-                const data = await response.json();
-                judgeOutput = data.choices?.[0]?.message?.content || '';
-            } else {
-                // Gemini API
-                const apiKey = (window as any).GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
-                response = await fetch(`${endpoint}?key=${apiKey}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text: judgePrompt }] }],
-                        generationConfig: {
-                            temperature: 0.2,
-                            maxOutputTokens: 500
-                        }
-                    })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Gemini API error: ${response.statusText}`);
-                }
-
-                const data = await response.json();
-                judgeOutput = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-            }
-
-            if (!judgeOutput) {
-                throw new Error('No response from judge model');
-            }
-
-            // Parse score from LLM output - enforce 1-10 range strictly
-            const scoreMatch = judgeOutput.match(/Score:\s*(\d+)/i);
-            const rawScore = scoreMatch ? parseInt(scoreMatch[1]) : 7;
-            const score = validateScore(rawScore); // Clamp to 1-10
-
-            // Extract explanation
-            const explanationMatch = judgeOutput.match(/Explanation:\s*(.+)/is);
-            const explanation = explanationMatch ? explanationMatch[1].trim() : judgeOutput;
-
-            // Update evaluation
-            onUpdateEvaluation(itemId, configId, 'score', score);
-            onUpdateEvaluation(itemId, configId, 'note', `🤖 LLM Judge (${judgeProvider === 'local' ? judgeModel || 'local' : judgeModel}): ${explanation}`);
-
-            console.log(`✓ LLM Judge completed for ${item.title || itemId}:`, {
+            const evaluation = await evaluateSummary(
+                item.sourceText,
+                output,
+                config.judgeCriteria,
                 judgeProvider,
                 judgeModel,
-                score,
-                rawScore,
-                explanation: explanation.substring(0, 100)
-            });
+                config.localEndpoint
+            );
+
+            // Update evaluation
+            onUpdateEvaluation(itemId, configId, 'score', evaluation.score);
+            onUpdateEvaluation(itemId, configId, 'note', evaluation.note);
+
+            console.log(`✓ LLM Judge completed for ${item.title || itemId}:`, evaluation);
 
             return true; // Success
         } catch (error: any) {

@@ -5,7 +5,7 @@ import InputArea from './components/InputArea';
 import OutputArea from './components/OutputArea';
 import BatchResults from './components/BatchResults';
 import { AppConfig, ModelType, ToneType, FormatType, HistoryItem, ViewMode, BatchItem } from './types';
-import { generateSummary, buildPrompt } from './services/geminiService';
+import { generateSummary, buildPrompt, evaluateSummary } from './services/geminiService';
 import { PanelLeftOpen, PanelLeftClose } from 'lucide-react';
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -197,6 +197,7 @@ const App: React.FC = () => {
       setBatchItems(prev => prev.map(pi => pi.id === item.id ? { ...pi, status: 'processing' } : pi));
 
       const itemResults: Record<string, string> = {};
+      const itemEvaluations: Record<string, any> = {};
 
       // Run all active configurations for this item
       await Promise.all(config.activeRunConfigs.map(async (configId) => {
@@ -222,19 +223,49 @@ const App: React.FC = () => {
         try {
           const result = await generateSummary(item.sourceText, tempConfig, runConfig.model);
           itemResults[configId] = result;
+
+          // --- LLM Judge Evaluation ---
+          try {
+            // Determine Judge Configuration
+            const judgeProvider = config.useMainModelAsJudge ? runConfig.provider : config.judgeProvider;
+            const judgeModel = config.useMainModelAsJudge ? runConfig.model : config.judgeModel;
+
+            // Skip evaluation if no judge model is selected/available
+            if (judgeModel) {
+              const evaluation = await evaluateSummary(
+                item.sourceText,
+                result,
+                config.judgeCriteria,
+                judgeProvider,
+                judgeModel,
+                config.localEndpoint
+              );
+
+              // Store evaluation
+              itemEvaluations[configId] = {
+                score: evaluation.score,
+                note: evaluation.note,
+                isGroundTruth: false
+              };
+            }
+          } catch (evalErr) {
+            console.error("Evaluation error:", evalErr);
+            itemEvaluations[configId] = { score: 0, note: "Evaluation failed", isGroundTruth: false };
+          }
+
         } catch (e: any) {
           console.error(`Batch generation error for ${runConfig.name} (${runConfig.model}):`, e);
           itemResults[configId] = `Error: ${e.message}`;
+          itemEvaluations[configId] = { score: 0, note: "Generation failed", isGroundTruth: false };
         }
       }));
 
-      // Update item with results
+      // Update item with results and evaluations
       setBatchItems(prev => prev.map(pi => pi.id === item.id ? {
         ...pi,
         status: 'done',
         results: itemResults,
-        // Initialize empty evals
-        evaluations: config.activeRunConfigs.reduce((acc, cid) => ({ ...acc, [cid]: { score: 0, note: '', isGroundTruth: false } }), {})
+        evaluations: itemEvaluations
       } : pi));
     }
 

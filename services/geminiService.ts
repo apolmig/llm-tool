@@ -1,6 +1,7 @@
 
 import { GoogleGenAI } from "@google/genai";
-import { AppConfig, FormatType } from "../types";
+import { AppConfig, FormatType, JudgeCriteria, ModelProvider } from "../types";
+
 
 // Initialize Gemini client
 // Note: Only used if provider is 'gemini'
@@ -30,22 +31,22 @@ export const generateSummary = async (
   modelOverride?: string
 ): Promise<string> => {
   const prompt = buildPrompt(text, config);
-  
+
   // Use the override if provided, otherwise fallback to the first active model
   const baseModelToUse = modelOverride || config.activeModels[0];
 
   // Construct Final Model String with Version
   let finalModel = baseModelToUse;
   if (config.modelVersion && config.modelVersion.trim() !== '') {
-      if (config.provider === 'gemini') {
-          // For Gemini: Append with dash (e.g., gemini-1.5-flash-001)
-          finalModel = `${baseModelToUse}-${config.modelVersion.trim()}`;
-      } else {
-          // For Local: Append with colon if typically used for tags (e.g., llama3:latest) 
-          // or dash depending on user preference, but standard ollama/docker style is colon for tags.
-          // To be safe and generic, we append with colon for local as it's the standard tag separator.
-          finalModel = `${baseModelToUse}:${config.modelVersion.trim()}`;
-      }
+    if (config.provider === 'gemini') {
+      // For Gemini: Append with dash (e.g., gemini-1.5-flash-001)
+      finalModel = `${baseModelToUse}-${config.modelVersion.trim()}`;
+    } else {
+      // For Local: Append with colon if typically used for tags (e.g., llama3:latest) 
+      // or dash depending on user preference, but standard ollama/docker style is colon for tags.
+      // To be safe and generic, we append with colon for local as it's the standard tag separator.
+      finalModel = `${baseModelToUse}:${config.modelVersion.trim()}`;
+    }
   }
 
   if (config.provider === 'local') {
@@ -108,5 +109,96 @@ const generateLocalSummary = async (prompt: string, config: AppConfig, model: st
   } catch (error) {
     console.error(`Local LLM Error (${model}):`, error);
     throw new Error(`Failed to connect to Local LLM (${model}). Ensure your local server is running.`);
+  }
+};
+
+export const evaluateSummary = async (
+  originalText: string,
+  generatedSummary: string,
+  criteria: JudgeCriteria[],
+  provider: ModelProvider,
+  model: string,
+  localEndpoint: string
+): Promise<{ score: number; note: string }> => {
+
+  // Build Evaluation Prompt
+  let prompt = `You are an expert AI evaluator. Your task is to grade the quality of a generated summary based on the original text and specific criteria.
+
+Original Text:
+"""
+${originalText}
+"""
+
+Generated Summary:
+"""
+${generatedSummary}
+"""
+
+Evaluation Criteria:
+`;
+
+  criteria.forEach(c => {
+    prompt += `- ${c.name} (Weight: ${c.weight}%): ${c.description}\n`;
+  });
+
+  prompt += `
+Instructions:
+1. Evaluate the summary against each criterion.
+2. Assign a score from 0 to 10 for each criterion.
+3. Calculate the final weighted score (0-10).
+4. Provide a brief explanation for the score.
+
+OUTPUT FORMAT:
+You must return a valid JSON object in the following format:
+{
+  "score": <number_0_to_10>,
+  "note": "<short_explanation>"
+}
+`;
+
+  let responseText = "";
+
+  try {
+    if (provider === 'local') {
+      // Re-use local generation logic but with specific prompt
+      const config: any = {
+        localEndpoint,
+        systemInstruction: "You are a strict and precise evaluator. Output only JSON.",
+        temperature: 0.1, // Low temp for consistency
+        maxOutputTokens: 500,
+        topP: 0.95
+      };
+      responseText = await generateLocalSummary(prompt, config, model);
+    } else {
+      // Gemini
+      const ai = getAiClient();
+      const response = await ai.models.generateContent({
+        model: model,
+        contents: prompt,
+        config: {
+          temperature: 0.1,
+          responseMimeType: 'application/json',
+        },
+      });
+      responseText = response.text || "{}";
+    }
+
+    // Parse JSON
+    try {
+      // Clean up markdown code blocks if present
+      const jsonStr = responseText.replace(/```json\n?|\n?```/g, '').trim();
+      const result = JSON.parse(jsonStr);
+      return {
+        score: typeof result.score === 'number' ? result.score : 0,
+        note: result.note || "No explanation provided."
+      };
+    } catch (e) {
+      console.error("Failed to parse evaluation JSON:", responseText);
+      return { score: 0, note: "Error parsing evaluator response." };
+    }
+
+  } catch (error) {
+    console.error("Evaluation failed:", error);
+    return { score: 0, note: `Evaluation failed: ${error instanceof Error ? error.message : 'Unknown error'}` };
   }
 };
