@@ -165,8 +165,9 @@ The workbench is now production-ready with excellent UX!
 - **PDF**: Uses `pdfjs-dist` to extract text from all pages.
 - **DOCX**: Uses `mammoth` to extract raw text from Word documents.
 - **Processing**:
-  - Currently treats the entire document as a single batch item.
-  - Future improvement: Split by pages or sections automatically.
+  - **PDF**: Automatically splits document into **one batch item per page**.
+  - **DOCX**: Automatically splits document into **separate items by paragraphs/sections** (double newlines).
+  - **CSV/Excel**: Each row becomes a batch item.
 
 **Usage**:
 - Drag and drop PDF or Word files into the Workbench area.

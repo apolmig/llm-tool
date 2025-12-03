@@ -135,18 +135,24 @@ const InputArea: React.FC<InputAreaProps> = ({
                     const result = await mammoth.extractRawText({ arrayBuffer });
                     const text = result.value;
 
-                    // Split by double newlines or some other heuristic if needed
-                    // For now, treat the whole doc as one item unless it's very long or has clear sections
-                    // Let's try to split by "Section" or similar if present, otherwise just one item
+                    // Split by double newlines to separate paragraphs/sections
+                    const sections = text.split(/\n\s*\n/).filter(s => s.trim().length > 0);
 
-                    resolve([{
+                    if (sections.length === 0) {
+                        resolve([]);
+                        return;
+                    }
+
+                    const items = sections.map((section, idx) => ({
                         id: crypto.randomUUID(),
-                        title: file.name.replace(/\.[^/.]+$/, ''),
-                        sourceText: text.trim(),
-                        status: 'pending',
+                        title: `${file.name.replace(/\.[^/.]+$/, '')} - Part ${idx + 1}`,
+                        sourceText: section.trim(),
+                        status: 'pending' as const,
                         results: {},
                         evaluations: {}
-                    }]);
+                    }));
+
+                    resolve(items);
                 } catch (err) {
                     reject(err);
                 }
@@ -160,23 +166,26 @@ const InputArea: React.FC<InputAreaProps> = ({
         try {
             const arrayBuffer = await file.arrayBuffer();
             const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-            let fullText = '';
+            const items: BatchItem[] = [];
 
             for (let i = 1; i <= pdf.numPages; i++) {
                 const page = await pdf.getPage(i);
                 const textContent = await page.getTextContent();
                 const pageText = textContent.items.map((item: any) => item.str).join(' ');
-                fullText += pageText + '\n\n';
+
+                if (pageText.trim().length > 0) {
+                    items.push({
+                        id: crypto.randomUUID(),
+                        title: `${file.name.replace(/\.[^/.]+$/, '')} - Page ${i}`,
+                        sourceText: pageText.trim(),
+                        status: 'pending',
+                        results: {},
+                        evaluations: {}
+                    });
+                }
             }
 
-            return [{
-                id: crypto.randomUUID(),
-                title: file.name.replace(/\.[^/.]+$/, ''),
-                sourceText: fullText.trim(),
-                status: 'pending',
-                results: {},
-                evaluations: {}
-            }];
+            return items;
         } catch (err) {
             console.error("Error parsing PDF:", err);
             throw new Error("Failed to parse PDF file");
