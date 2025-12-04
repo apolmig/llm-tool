@@ -112,17 +112,27 @@ const generateLocalSummary = async (prompt: string, config: AppConfig, model: st
   }
 };
 
+export interface EvaluationResult {
+  score: number;
+  note: string;
+  criteriaScores?: Record<string, number>;
+  comparedToReference?: boolean;
+}
+
 export const evaluateSummary = async (
   originalText: string,
   generatedSummary: string,
   criteria: JudgeCriteria[],
   provider: ModelProvider,
   model: string,
-  localEndpoint: string
-): Promise<{ score: number; note: string }> => {
+  localEndpoint: string,
+  referenceSummary?: string
+): Promise<EvaluationResult> => {
 
-  // Build Evaluation Prompt
-  let prompt = `You are an expert AI evaluator. Your task is to grade the quality of a generated summary based on the original text and specific criteria.
+  const hasReference = referenceSummary && referenceSummary.trim().length > 0;
+
+  // Build Evaluation Prompt - different approach based on whether reference exists
+  let prompt = `You are an expert AI evaluator. Your task is to grade the quality of a generated summary.
 
 Original Text:
 """
@@ -133,7 +143,22 @@ Generated Summary:
 """
 ${generatedSummary}
 """
+`;
 
+  // Add reference comparison section if available
+  if (hasReference) {
+    prompt += `
+Reference Summary (Gold Standard):
+"""
+${referenceSummary}
+"""
+
+IMPORTANT: Compare the Generated Summary against both the Original Text AND the Reference Summary.
+The Reference Summary represents high-quality output - use it as a benchmark for evaluation.
+`;
+  }
+
+  prompt += `
 Evaluation Criteria:
 `;
 
@@ -144,15 +169,19 @@ Evaluation Criteria:
   prompt += `
 Instructions:
 1. Evaluate the summary against each criterion.
-2. Assign a score from 0 to 10 for each criterion.
+2. Assign a score from 0 to 10 for EACH criterion individually.
 3. Calculate the final weighted score (0-10).
 4. Provide a brief explanation for the score.
+${hasReference ? '5. Note how well the generated summary compares to the reference.' : ''}
 
 OUTPUT FORMAT:
 You must return a valid JSON object in the following format:
 {
   "score": <number_0_to_10>,
-  "note": "<short_explanation>"
+  "note": "<short_explanation>",
+  "criteriaScores": {
+${criteria.map(c => `    "${c.name}": <number_0_to_10>`).join(',\n')}
+  }
 }
 `;
 
@@ -163,9 +192,9 @@ You must return a valid JSON object in the following format:
       // Re-use local generation logic but with specific prompt
       const config: any = {
         localEndpoint,
-        systemInstruction: "You are a strict and precise evaluator. Output only JSON.",
+        systemInstruction: "You are a strict and precise evaluator. Output only valid JSON. No markdown formatting.",
         temperature: 0.1, // Low temp for consistency
-        maxOutputTokens: 500,
+        maxOutputTokens: 800,
         topP: 0.95
       };
       responseText = await generateLocalSummary(prompt, config, model);
@@ -188,17 +217,37 @@ You must return a valid JSON object in the following format:
       // Clean up markdown code blocks if present
       const jsonStr = responseText.replace(/```json\n?|\n?```/g, '').trim();
       const result = JSON.parse(jsonStr);
-      return {
-        score: typeof result.score === 'number' ? result.score : 0,
-        note: result.note || "No explanation provided."
+
+      // Build result with criteria scores
+      const evaluationResult: EvaluationResult = {
+        score: typeof result.score === 'number' ? Math.min(10, Math.max(0, result.score)) : 0,
+        note: result.note || "No explanation provided.",
+        comparedToReference: hasReference
       };
+
+      // Extract per-criterion scores if provided
+      if (result.criteriaScores && typeof result.criteriaScores === 'object') {
+        evaluationResult.criteriaScores = {};
+        for (const [key, value] of Object.entries(result.criteriaScores)) {
+          if (typeof value === 'number') {
+            evaluationResult.criteriaScores[key] = Math.min(10, Math.max(0, value));
+          }
+        }
+      }
+
+      return evaluationResult;
     } catch (e) {
       console.error("Failed to parse evaluation JSON:", responseText);
-      return { score: 0, note: "Error parsing evaluator response." };
+      return { score: 0, note: "Error parsing evaluator response.", comparedToReference: hasReference };
     }
 
   } catch (error) {
     console.error("Evaluation failed:", error);
-    return { score: 0, note: `Evaluation failed: ${error instanceof Error ? error.message : 'Unknown error'}` };
+    return {
+      score: 0,
+      note: `Evaluation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      comparedToReference: hasReference
+    };
   }
 };
+

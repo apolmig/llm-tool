@@ -24,10 +24,11 @@ const DEFAULT_CONFIG: AppConfig = {
   maxWords: 250,
   runConfigurations: [],
   activeRunConfigs: [],
-  // LLM Judge defaults
+  // LLM Judge defaults - empty values mean not configured
   judgeProvider: 'local',
   judgeModel: '',
-  useMainModelAsJudge: true,
+  judgeEndpoint: '', // Must be set for judge to work
+  useMainModelAsJudge: false, // Default to independent judge
   judgeCriteria: [
     { id: '1', name: 'ACCURACY', weight: 30, description: 'Does it capture key information without errors?' },
     { id: '2', name: 'CLARITY', weight: 25, description: 'Is it easy to understand and well-structured?' },
@@ -238,14 +239,17 @@ const App: React.FC = () => {
                 config.judgeCriteria,
                 judgeProvider,
                 judgeModel,
-                config.localEndpoint
+                config.localEndpoint,
+                item.referenceSummary // Pass reference for comparison
               );
 
-              // Store evaluation
+              // Store evaluation with all fields
               itemEvaluations[configId] = {
                 score: evaluation.score,
                 note: evaluation.note,
-                isGroundTruth: false
+                isGroundTruth: false,
+                criteriaScores: evaluation.criteriaScores,
+                comparedToReference: evaluation.comparedToReference
               };
             }
           } catch (evalErr) {
@@ -290,6 +294,13 @@ const App: React.FC = () => {
       updatedEvaluations[model] = { ...currentEval, [field]: value };
 
       return { ...item, evaluations: updatedEvaluations };
+    }));
+  };
+
+  const handleUpdateItem = (itemId: string, field: 'referenceSummary' | 'humanValidated', value: any) => {
+    setBatchItems(prev => prev.map(item => {
+      if (item.id !== itemId) return item;
+      return { ...item, [field]: value };
     }));
   };
 
@@ -405,6 +416,7 @@ const App: React.FC = () => {
                 activeModels={config.activeModels}
                 config={config}
                 onUpdateEvaluation={handleUpdateEvaluation}
+                onUpdateItem={handleUpdateItem}
               />
             ) : (
               <OutputArea results={results} />
@@ -417,3 +429,4 @@ const App: React.FC = () => {
 };
 
 export default App;
+

@@ -243,9 +243,11 @@ const InputArea: React.FC<InputAreaProps> = ({
 
                     const textKeywords = ['text', 'content', 'input', 'body', 'sourcetext', 'prompt', 'description', 'message', 'review', 'article', 'texto'];
                     const titleKeywords = ['title', 'name', 'id', 'label', 'identifier', 'subject', 'item', 'titulo'];
+                    const referenceKeywords = ['reference', 'master', 'expected', 'ground_truth', 'groundtruth', 'target', 'gold', 'ideal', 'referencia'];
 
                     let textColIdx = headers.findIndex((h: string) => textKeywords.some(k => h.includes(k)));
                     let titleColIdx = headers.findIndex((h: string) => titleKeywords.some(k => h.includes(k)));
+                    let referenceColIdx = headers.findIndex((h: string) => referenceKeywords.some(k => h.includes(k)));
 
                     // Fallback: if no headers match, use first non-empty column as text
                     if (textColIdx === -1) {
@@ -264,10 +266,16 @@ const InputArea: React.FC<InputAreaProps> = ({
                                 ? String(row[titleColIdx]).trim()
                                 : `${file.name.replace(/\.[^/.]+$/, '')} Row ${idx + 2}`;
 
+                            // Extract reference summary if column exists
+                            const referenceVal = (referenceColIdx > -1 && row[referenceColIdx])
+                                ? String(row[referenceColIdx]).trim()
+                                : undefined;
+
                             newItems.push({
                                 id: crypto.randomUUID(),
                                 title: titleVal,
                                 sourceText: String(textVal).trim(),
+                                referenceSummary: referenceVal || undefined,
                                 status: 'pending',
                                 results: {},
                                 evaluations: {}
@@ -277,6 +285,12 @@ const InputArea: React.FC<InputAreaProps> = ({
 
                     if (newItems.length === 0) {
                         console.warn('No valid rows found in Excel file');
+                    }
+
+                    // Log if references were found
+                    const itemsWithRef = newItems.filter(i => i.referenceSummary);
+                    if (itemsWithRef.length > 0) {
+                        console.log(`✓ Loaded ${itemsWithRef.length} items with reference summaries`);
                     }
 
                     resolve(newItems);
@@ -293,6 +307,7 @@ const InputArea: React.FC<InputAreaProps> = ({
             reader.readAsBinaryString(file);
         });
     };
+
 
     // Robust CSV Parser: Handles newlines within quotes
     const parseCSV = (text: string): string[][] => {
@@ -417,15 +432,18 @@ const InputArea: React.FC<InputAreaProps> = ({
 
                     const textKeywords = ['text', 'content', 'input', 'body', 'sourcetext', 'prompt', 'description', 'message', 'review', 'article'];
                     const titleKeywords = ['title', 'name', 'id', 'label', 'identifier', 'subject'];
+                    const referenceKeywords = ['reference', 'master', 'expected', 'groundtruth', 'target', 'gold', 'ideal'];
 
                     let textColIdx = normalizedHeader.findIndex(h => textKeywords.includes(h));
                     let titleColIdx = normalizedHeader.findIndex(h => titleKeywords.includes(h));
+                    let referenceColIdx = normalizedHeader.findIndex(h => referenceKeywords.includes(h));
 
                     // Fuzzy match if exact match fails
                     if (textColIdx === -1) textColIdx = normalizedHeader.findIndex(h => textKeywords.some(k => h.includes(k)));
                     if (titleColIdx === -1) titleColIdx = normalizedHeader.findIndex(h => titleKeywords.some(k => h.includes(k)));
+                    if (referenceColIdx === -1) referenceColIdx = normalizedHeader.findIndex(h => referenceKeywords.some(k => h.includes(k)));
 
-                    const hasHeader = textColIdx !== -1 || titleColIdx !== -1;
+                    const hasHeader = textColIdx !== -1 || titleColIdx !== -1 || referenceColIdx !== -1;
                     const startRow = hasHeader ? 1 : 0;
 
                     // If no header detected, default text to column 0, title to -1
@@ -436,10 +454,15 @@ const InputArea: React.FC<InputAreaProps> = ({
                     for (let i = startRow; i < rows.length; i++) {
                         const row = rows[i];
                         if (row[textColIdx] && row[textColIdx].trim()) {
+                            const referenceVal = (referenceColIdx > -1 && row[referenceColIdx])
+                                ? row[referenceColIdx].trim()
+                                : undefined;
+
                             newItems.push({
                                 id: crypto.randomUUID(),
                                 title: (titleColIdx > -1 && row[titleColIdx]) ? row[titleColIdx].trim() : `${filename} #${i + 1}`,
                                 sourceText: row[textColIdx].trim(),
+                                referenceSummary: referenceVal || undefined,
                                 status: 'pending' as const,
                                 results: {},
                                 evaluations: {}

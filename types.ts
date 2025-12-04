@@ -43,6 +43,7 @@ export interface AppConfig {
   // LLM Judge Configuration
   judgeProvider: ModelProvider;
   judgeModel: string;
+  judgeEndpoint: string; // Endpoint for Cloud API or Local LLM judge
   useMainModelAsJudge: boolean;
   judgeCriteria: JudgeCriteria[];
 }
@@ -89,18 +90,25 @@ export interface ChatMessage {
 
 export type ViewMode = 'playground' | 'batch';
 
+export type ValidationStatus = 'pending' | 'approved' | 'rejected';
+
 export interface Evaluation {
   score: number; // 0-10
   note: string;
   isGroundTruth: boolean; // If true, this is the target for fine-tuning
+  criteriaScores?: Record<string, number>; // Per-criterion scores (0-10)
+  comparedToReference?: boolean; // Whether reference was used in grading
 }
 
 export interface BatchItem {
   id: string;
   title?: string;
   sourceText: string;
+  referenceSummary?: string; // Master/ground-truth summary for comparison
   status: 'pending' | 'processing' | 'done' | 'error';
   results: Record<string, string>; // model -> generated text
   evaluations: Record<string, Evaluation>; // model -> grading details
+  humanValidated?: ValidationStatus; // For SFT curation workflow
   error?: string;
 }
+

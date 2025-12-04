@@ -1,22 +1,28 @@
 
 import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import { BatchItem, AppConfig } from '../types';
-import { evaluateSummary } from '../services/geminiService';
+import { BatchItem, AppConfig, ValidationStatus } from '../types';
+import { evaluateSummary, EvaluationResult } from '../services/geminiService';
 import ReactMarkdown from 'react-markdown';
-import { Star, Download, ChevronDown, ChevronRight, MessageSquare, FileJson, Check, Search, X, Target, ArrowUpDown, Settings, FileSpreadsheet } from 'lucide-react';
+import { Star, Download, ChevronDown, ChevronRight, MessageSquare, FileJson, Check, Search, X, Target, ArrowUpDown, Settings, FileSpreadsheet, BookOpen, ThumbsUp, ThumbsDown, Filter } from 'lucide-react';
 
 interface BatchResultsProps {
     items: BatchItem[];
     activeModels: string[]; // Legacy, kept for type compatibility but unused in new logic
     config: AppConfig;
-    onUpdateEvaluation: (itemId: string, model: string, field: 'score' | 'note' | 'isGroundTruth', value: any) => void;
+    onUpdateEvaluation: (itemId: string, model: string, field: 'score' | 'note' | 'isGroundTruth' | 'criteriaScores' | 'comparedToReference', value: any) => void;
+    onUpdateItem?: (itemId: string, field: 'referenceSummary' | 'humanValidated', value: any) => void;
 }
 
-const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config, onUpdateEvaluation }) => {
+
+const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config, onUpdateEvaluation, onUpdateItem }) => {
     const [expandedRow, setExpandedRow] = useState<string | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [sortCriteria, setSortCriteria] = useState<'default' | 'consistency'>('default');
+    const [filterMode, setFilterMode] = useState<'all' | 'pending' | 'approved' | 'rejected' | 'low-score'>('all');
+    const [showComparison, setShowComparison] = useState(false);
+    const [showTrainingMenu, setShowTrainingMenu] = useState(false);
+
 
     // Layout State
     const [visibleColumns, setVisibleColumns] = useState<string[]>([]);
@@ -27,10 +33,131 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
     const [isBatchJudging, setIsBatchJudging] = useState(false);
     const [batchJudgeProgress, setBatchJudgeProgress] = useState({ current: 0, total: 0 });
 
+    // Judge Configuration Check - must have endpoint and model set
+    const isJudgeConfigured = Boolean(config.judgeEndpoint?.trim() && config.judgeModel?.trim());
+
+    // Model Comparison Statistics
+    const comparisonStats = useMemo(() => {
+        const stats: Record<string, {
+            configId: string;
+            name: string;
+            totalEvaluated: number;
+            avgScore: number;
+            scores: number[];
+            wins: number;
+            distribution: Record<string, number>;
+            bestCount: number;
+            worstCount: number;
+            criteriaAvg: Record<string, number>;
+        }> = {};
+
+        // Initialize stats for each config
+        config.activeRunConfigs.forEach(configId => {
+            const runConfig = config.runConfigurations.find(c => c.id === configId);
+            stats[configId] = {
+                configId,
+                name: runConfig?.name || configId,
+                totalEvaluated: 0,
+                avgScore: 0,
+                scores: [],
+                wins: 0,
+                distribution: { '1-3': 0, '4-6': 0, '7-8': 0, '9-10': 0 },
+                bestCount: 0,
+                worstCount: 0,
+                criteriaAvg: {}
+            };
+        });
+
+        // Calculate per-item best/worst and aggregate scores
+        items.forEach(item => {
+            const itemScores: { configId: string; score: number }[] = [];
+
+            config.activeRunConfigs.forEach(configId => {
+                const evaluation = item.evaluations[configId];
+                if (evaluation && typeof evaluation.score === 'number') {
+                    const score = evaluation.score;
+                    stats[configId].scores.push(score);
+                    stats[configId].totalEvaluated++;
+                    itemScores.push({ configId, score });
+
+                    // Distribution buckets
+                    if (score <= 3) stats[configId].distribution['1-3']++;
+                    else if (score <= 6) stats[configId].distribution['4-6']++;
+                    else if (score <= 8) stats[configId].distribution['7-8']++;
+                    else stats[configId].distribution['9-10']++;
+
+                    // Criteria averages
+                    if (evaluation.criteriaScores) {
+                        Object.entries(evaluation.criteriaScores).forEach(([criterion, critScore]) => {
+                            if (!stats[configId].criteriaAvg[criterion]) {
+                                stats[configId].criteriaAvg[criterion] = 0;
+                            }
+                            stats[configId].criteriaAvg[criterion] += critScore as number;
+                        });
+                    }
+                }
+            });
+
+            // Determine winner for this item (highest score)
+            if (itemScores.length > 1) {
+                const sorted = [...itemScores].sort((a, b) => b.score - a.score);
+                const best = sorted[0];
+                const worst = sorted[sorted.length - 1];
+
+                if (best.score > worst.score) {
+                    stats[best.configId].wins++;
+                    stats[best.configId].bestCount++;
+                    stats[worst.configId].worstCount++;
+                }
+            }
+        });
+
+        // Calculate averages
+        Object.keys(stats).forEach(configId => {
+            const s = stats[configId];
+            if (s.scores.length > 0) {
+                s.avgScore = s.scores.reduce((a, b) => a + b, 0) / s.scores.length;
+            }
+            Object.keys(s.criteriaAvg).forEach(criterion => {
+                if (s.totalEvaluated > 0) {
+                    s.criteriaAvg[criterion] = s.criteriaAvg[criterion] / s.totalEvaluated;
+                }
+            });
+        });
+
+        return stats;
+    }, [items, config.activeRunConfigs, config.runConfigurations]);
+
     // Initialize visible columns with all active run configs on mount/change
     React.useEffect(() => {
         setVisibleColumns(config.activeRunConfigs);
     }, [config.activeRunConfigs]);
+
+    // Filter items by search term and validation status
+    const filteredItems = useMemo(() => {
+        return items.filter(item => {
+            // Search filter
+            if (searchTerm) {
+                const term = searchTerm.toLowerCase();
+                const matchesSearch =
+                    (item.title && item.title.toLowerCase().includes(term)) ||
+                    item.sourceText.toLowerCase().includes(term) ||
+                    Object.values(item.results).some(r => r.toLowerCase().includes(term));
+                if (!matchesSearch) return false;
+            }
+
+            // Validation status filter
+            if (filterMode === 'all') return true;
+            if (filterMode === 'pending') return !item.humanValidated || item.humanValidated === 'pending';
+            if (filterMode === 'approved') return item.humanValidated === 'approved';
+            if (filterMode === 'rejected') return item.humanValidated === 'rejected';
+            if (filterMode === 'low-score') {
+                // Low score = any evaluation with score < 7
+                return Object.values(item.evaluations).some(e => e.score && e.score < 7);
+            }
+            return true;
+        });
+    }, [items, searchTerm, filterMode]);
 
     // Validate and clamp score between 1 and 10
     const validateScore = (value: number): number => {
@@ -63,18 +190,28 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
             const judgeProvider = config.useMainModelAsJudge ? runConfig.provider : config.judgeProvider;
             const judgeModel = config.useMainModelAsJudge ? runConfig.model : config.judgeModel;
 
+            // Pass reference summary if available
             const evaluation = await evaluateSummary(
                 item.sourceText,
                 output,
                 config.judgeCriteria,
                 judgeProvider,
                 judgeModel,
-                config.localEndpoint
+                config.localEndpoint,
+                item.referenceSummary // Pass reference for comparison if available
             );
 
-            // Update evaluation
+            // Update evaluation with all new fields
             onUpdateEvaluation(itemId, configId, 'score', evaluation.score);
             onUpdateEvaluation(itemId, configId, 'note', evaluation.note);
+
+            // Store new fields if present
+            if (evaluation.criteriaScores) {
+                onUpdateEvaluation(itemId, configId, 'criteriaScores', evaluation.criteriaScores);
+            }
+            if (evaluation.comparedToReference !== undefined) {
+                onUpdateEvaluation(itemId, configId, 'comparedToReference', evaluation.comparedToReference);
+            }
 
             console.log(`✓ LLM Judge completed for ${item.title || itemId}:`, evaluation);
 
@@ -180,6 +317,157 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
         } catch (error) {
             console.error('Error exporting JSONL:', error);
             alert('Failed to export JSONL file. Check console for details.');
+        }
+    };
+
+    // Export for Reward Model Training (RL) - includes scores
+    const exportRL = () => {
+        try {
+            const dataset: any[] = [];
+
+            items.forEach(item => {
+                Object.keys(item.results).forEach(configId => {
+                    const runConfig = config.runConfigurations.find(c => c.id === configId);
+                    const evaluation = item.evaluations[configId];
+                    const output = item.results[configId];
+
+                    if (output && evaluation && typeof evaluation.score === 'number') {
+                        dataset.push({
+                            input: item.sourceText,
+                            output: output,
+                            score: evaluation.score,
+                            reference: item.referenceSummary || null,
+                            criteriaScores: evaluation.criteriaScores || null,
+                            configName: runConfig?.name || configId,
+                            comparedToReference: evaluation.comparedToReference || false
+                        });
+                    }
+                });
+            });
+
+            if (dataset.length === 0) {
+                alert('No scored outputs to export for RL training.');
+                return;
+            }
+
+            const jsonlContent = dataset.map(d => JSON.stringify(d)).join('\n');
+            const blob = new Blob([jsonlContent], { type: 'application/jsonl' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `rl_reward_dataset_${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+
+            console.log(`Exported ${dataset.length} examples for RL training`);
+        } catch (error) {
+            console.error('Error exporting RL dataset:', error);
+            alert('Failed to export RL dataset.');
+        }
+    };
+
+    // Export for SFT - only approved/high-score outputs
+    const exportSFT = (minScore: number = 7) => {
+        try {
+            const dataset: any[] = [];
+
+            items.forEach(item => {
+                // Only include approved items OR high-scoring items with ground truth flag
+                const validConfigs = Object.keys(item.results).filter(configId => {
+                    const evaluation = item.evaluations[configId];
+                    const isApproved = item.humanValidated === 'approved';
+                    const isHighScore = evaluation && evaluation.score >= minScore;
+                    const isGroundTruth = evaluation && evaluation.isGroundTruth;
+                    return isApproved || isHighScore || isGroundTruth;
+                });
+
+                validConfigs.forEach(configId => {
+                    const output = item.results[configId];
+                    if (output) {
+                        dataset.push({
+                            messages: [
+                                { role: "system", content: config.systemInstruction },
+                                { role: "user", content: item.sourceText },
+                                { role: "assistant", content: output }
+                            ]
+                        });
+                    }
+                });
+            });
+
+            if (dataset.length === 0) {
+                alert(`No outputs meeting SFT criteria (score >= ${minScore}, approved, or ground truth).`);
+                return;
+            }
+
+            const jsonlContent = dataset.map(d => JSON.stringify(d)).join('\n');
+            const blob = new Blob([jsonlContent], { type: 'application/jsonl' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `sft_dataset_${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+
+            console.log(`Exported ${dataset.length} examples for SFT`);
+        } catch (error) {
+            console.error('Error exporting SFT dataset:', error);
+            alert('Failed to export SFT dataset.');
+        }
+    };
+
+    // Export for DPO - chosen/rejected pairs from same source
+    const exportDPO = () => {
+        try {
+            const dataset: any[] = [];
+
+            items.forEach(item => {
+                const configScores = Object.keys(item.results)
+                    .map(configId => ({
+                        configId,
+                        output: item.results[configId],
+                        score: item.evaluations[configId]?.score || 0
+                    }))
+                    .filter(x => x.output && x.output.trim())
+                    .sort((a, b) => b.score - a.score);
+
+                // Need at least 2 different scores to create preference pair
+                if (configScores.length >= 2 && configScores[0].score !== configScores[configScores.length - 1].score) {
+                    const chosen = configScores[0];
+                    const rejected = configScores[configScores.length - 1];
+
+                    dataset.push({
+                        prompt: item.sourceText,
+                        chosen: chosen.output,
+                        rejected: rejected.output,
+                        chosen_score: chosen.score,
+                        rejected_score: rejected.score,
+                        reference: item.referenceSummary || null
+                    });
+                }
+            });
+
+            if (dataset.length === 0) {
+                alert('No valid preference pairs for DPO export. Need items with multiple configs and different scores.');
+                return;
+            }
+
+            const jsonlContent = dataset.map(d => JSON.stringify(d)).join('\n');
+            const blob = new Blob([jsonlContent], { type: 'application/jsonl' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `dpo_preferences_${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+
+            console.log(`Exported ${dataset.length} preference pairs for DPO`);
+        } catch (error) {
+            console.error('Error exporting DPO dataset:', error);
+            alert('Failed to export DPO dataset.');
         }
     };
 
@@ -315,16 +603,6 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
         }
     };
 
-    // Filter items based on search term
-    const filteredItems = useMemo(() => items.filter(item => {
-        if (!searchTerm.trim()) return true;
-        const term = searchTerm.toLowerCase().trim();
-        const matchesSource = item.sourceText.toLowerCase().includes(term);
-        const matchesTitle = item.title?.toLowerCase().includes(term);
-        const matchesResults = Object.values(item.results).some(r => r.toLowerCase().includes(term));
-        return matchesSource || matchesResults || matchesTitle;
-    }), [items, searchTerm]);
-
     // Analyze Model consistency
     const modelStats = useMemo(() => {
         const stats: Record<string, { avgWords: number; adherence: number; isConsistent: boolean }> = {};
@@ -395,332 +673,548 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
     return (
         <div className="flex flex-col h-full bg-slate-950">
             {/* Header */}
-            <div className="p-4 border-b border-slate-800 flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center bg-slate-950">
-                <div>
-                    <h2 className="text-lg font-semibold text-slate-100">Evaluation Workbench</h2>
-                    <p className="text-xs text-slate-500">
-                        {filteredItems.length !== items.length ? (
-                            <span className="text-indigo-400 font-medium">{filteredItems.length} matching</span>
-                        ) : (
-                            <span>{items.length} Test Cases</span>
-                        )}
-                        {' '}• {config.activeRunConfigs.length} Configs Active
-                    </p>
-                </div>
-
-                <div className="flex items-center gap-3 w-full sm:w-auto">
-                    {/* Column Visibility Toggle */}
-                    <div className="relative group">
-                        <button className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700 transition-colors">
-                            <Settings size={14} />
-                            <span className="hidden sm:inline">Columns</span>
-                        </button>
-                        <div className="absolute right-0 top-full mt-2 w-48 bg-slate-900 border border-slate-800 rounded-lg shadow-xl p-2 hidden group-hover:block z-50">
-                            <div className="text-[10px] uppercase font-bold text-slate-500 mb-2 px-1">Toggle Visibility</div>
-                            {config.runConfigurations.filter(c => config.activeRunConfigs.includes(c.id)).map(c => (
-                                <button
-                                    key={c.id}
-                                    onClick={() => toggleColumn(c.id)}
-                                    className="w-full text-left px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800 rounded flex items-center justify-between"
-                                >
-                                    <span className="truncate">{c.name}</span>
-                                    {visibleColumns.includes(c.id) && <Check size={12} className="text-emerald-400" />}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                    <div className="relative group flex-1 sm:flex-none">
-                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-400 transition-colors" size={14} />
-                        <input
-                            type="text"
-                            placeholder="Search tasks..."
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                            className="w-full sm:w-48 focus:w-full sm:focus:w-64 bg-slate-900 border border-slate-800 text-slate-200 text-xs rounded-lg pl-8 pr-8 py-2 focus:ring-1 focus:ring-indigo-500 outline-none transition-all placeholder-slate-600"
-                        />
-                        {searchTerm && (
-                            <button
-                                onClick={() => setSearchTerm('')}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 p-1"
-                            >
-                                <X size={12} />
-                            </button>
-                        )}
-                    </div>
-
-                    <button
-                        onClick={() => setSortCriteria(prev => prev === 'default' ? 'consistency' : 'default')}
-                        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors border ${sortCriteria === 'consistency'
-                            ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
-                            : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
-                            }`}
-                        title="Sort columns by adherence to word count target"
-                    >
-                        <ArrowUpDown size={14} />
-                        <span className="hidden sm:inline">{sortCriteria === 'consistency' ? 'Best Adherence' : 'Default Order'}</span>
-                    </button>
-
-                    <div className="flex items-center gap-2">
-                        {/* Batch Judge Button */}
-                        <button
-                            onClick={judgeAllItems}
-                            disabled={isBatchJudging || items.length === 0}
-                            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors border whitespace-nowrap ${isBatchJudging
-                                ? 'bg-purple-500/20 text-purple-300 border-purple-500/30 cursor-wait'
-                                : 'bg-slate-800 hover:bg-slate-700 text-purple-300 border-slate-700'
-                                }`}
-                            title="Use LLM to judge all results automatically"
-                        >
-                            {isBatchJudging ? (
-                                <>
-                                    <div className="w-3.5 h-3.5 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin" />
-                                    <span className="hidden sm:inline">
-                                        Judging {batchJudgeProgress.current}/{batchJudgeProgress.total}
-                                    </span>
-                                </>
+            <div className="p-4 border-b border-slate-800 bg-slate-950">
+                <div className="flex flex-wrap gap-3 items-center">
+                    <div className="flex-shrink-0">
+                        <h2 className="text-lg font-semibold text-slate-100">Evaluation Workbench</h2>
+                        <p className="text-xs text-slate-500">
+                            {filteredItems.length !== items.length ? (
+                                <span className="text-indigo-400 font-medium">{filteredItems.length} matching</span>
                             ) : (
-                                <>
-                                    <Target size={14} />
-                                    <span className="hidden sm:inline">Judge All</span>
-                                </>
+                                <span>{items.length} Test Cases</span>
                             )}
-                        </button>
+                            {' '}• {config.activeRunConfigs.length} Configs Active
+                        </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap flex-1 justify-end">
+                        {/* Column Visibility Toggle */}
+                        <div className="relative group">
+                            <button className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700 transition-colors">
+                                <Settings size={14} />
+                                <span className="hidden sm:inline">Columns</span>
+                            </button>
+                            <div className="absolute right-0 top-full mt-2 w-48 bg-slate-900 border border-slate-800 rounded-lg shadow-xl p-2 hidden group-hover:block z-50">
+                                <div className="text-[10px] uppercase font-bold text-slate-500 mb-2 px-1">Toggle Visibility</div>
+                                {config.runConfigurations.filter(c => config.activeRunConfigs.includes(c.id)).map(c => (
+                                    <button
+                                        key={c.id}
+                                        onClick={() => toggleColumn(c.id)}
+                                        className="w-full text-left px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800 rounded flex items-center justify-between"
+                                    >
+                                        <span className="truncate">{c.name}</span>
+                                        {visibleColumns.includes(c.id) && <Check size={12} className="text-emerald-400" />}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="relative group flex-1 sm:flex-none">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-400 transition-colors" size={14} />
+                            <input
+                                type="text"
+                                placeholder="Search tasks..."
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                className="w-full sm:w-48 focus:w-full sm:focus:w-64 bg-slate-900 border border-slate-800 text-slate-200 text-xs rounded-lg pl-8 pr-8 py-2 focus:ring-1 focus:ring-indigo-500 outline-none transition-all placeholder-slate-600"
+                            />
+                            {searchTerm && (
+                                <button
+                                    onClick={() => setSearchTerm('')}
+                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 p-1"
+                                >
+                                    <X size={12} />
+                                </button>
+                            )}
+                        </div>
 
                         <button
-                            onClick={exportJSONL}
-                            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 px-3 py-2 rounded-lg text-xs font-medium transition-colors border border-slate-700 whitespace-nowrap"
-                            title="Export as JSONL for fine-tuning (ground truth only)"
+                            onClick={() => setSortCriteria(prev => prev === 'default' ? 'consistency' : 'default')}
+                            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors border ${sortCriteria === 'consistency'
+                                ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
+                                : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
+                                }`}
+                            title="Sort columns by adherence to word count target"
                         >
-                            <FileJson size={14} />
-                            <span className="hidden sm:inline">JSONL</span>
+                            <ArrowUpDown size={14} />
+                            <span className="hidden sm:inline">{sortCriteria === 'consistency' ? 'Best Adherence' : 'Default Order'}</span>
                         </button>
+
+                        {/* Model Comparison Toggle */}
                         <button
-                            onClick={exportExcel}
-                            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-green-300 px-3 py-2 rounded-lg text-xs font-medium transition-colors border border-slate-700 whitespace-nowrap"
-                            title="Export all data as Excel spreadsheet"
+                            onClick={() => setShowComparison(prev => !prev)}
+                            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors border ${showComparison
+                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                                : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
+                                }`}
+                            title="Show model comparison dashboard"
                         >
-                            <FileSpreadsheet size={14} />
-                            <span className="hidden sm:inline">Excel</span>
+                            <Star size={14} />
+                            <span className="hidden sm:inline">Compare</span>
                         </button>
-                        <button
-                            onClick={exportCSV}
-                            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-emerald-300 px-3 py-2 rounded-lg text-xs font-medium transition-colors border border-slate-700 whitespace-nowrap"
-                            title="Export all data as CSV spreadsheet"
-                        >
-                            <Download size={14} />
-                            <span className="hidden sm:inline">CSV</span>
-                        </button>
+
+                        {/* Filter Dropdown */}
+                        <div className="relative group">
+                            <button className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors border ${filterMode !== 'all'
+                                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
+                                : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
+                                }`}>
+                                <Filter size={14} />
+                                <span className="hidden sm:inline">{
+                                    filterMode === 'all' ? 'All' :
+                                        filterMode === 'pending' ? 'Pending' :
+                                            filterMode === 'approved' ? 'Approved' :
+                                                filterMode === 'rejected' ? 'Rejected' :
+                                                    'Low Score'
+                                }</span>
+                            </button>
+                            <div className="absolute right-0 top-full mt-2 w-36 bg-slate-900 border border-slate-700 rounded-lg shadow-xl hidden group-hover:block z-50">
+                                {(['all', 'pending', 'approved', 'rejected', 'low-score'] as const).map(mode => (
+                                    <button
+                                        key={mode}
+                                        onClick={() => setFilterMode(mode)}
+                                        className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between ${filterMode === mode
+                                            ? 'bg-cyan-500/20 text-cyan-300'
+                                            : 'text-slate-300 hover:bg-slate-800'
+                                            }`}
+                                    >
+                                        {mode === 'all' ? 'All Items' :
+                                            mode === 'pending' ? '⏳ Pending' :
+                                                mode === 'approved' ? '✅ Approved' :
+                                                    mode === 'rejected' ? '❌ Rejected' :
+                                                        '⚠️ Low Score (<7)'}
+                                        {filterMode === mode && <Check size={12} />}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                            {/* Batch Judge Button */}
+                            <button
+                                onClick={judgeAllItems}
+                                disabled={!isJudgeConfigured || isBatchJudging || items.length === 0}
+                                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors border whitespace-nowrap ${!isJudgeConfigured
+                                    ? 'bg-slate-800/50 text-slate-500 border-slate-700 cursor-not-allowed'
+                                    : isBatchJudging
+                                        ? 'bg-purple-500/20 text-purple-300 border-purple-500/30 cursor-wait'
+                                        : 'bg-slate-800 hover:bg-slate-700 text-purple-300 border-slate-700'
+                                    }`}
+                                title={!isJudgeConfigured ? '⚠️ Configure judge endpoint and model in Settings first' : 'Use LLM to judge all results automatically'}
+                            >
+                                {isBatchJudging ? (
+                                    <>
+                                        <div className="w-3.5 h-3.5 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin" />
+                                        <span className="hidden sm:inline">
+                                            Judging {batchJudgeProgress.current}/{batchJudgeProgress.total}
+                                        </span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Target size={14} />
+                                        <span className="hidden sm:inline">Judge All</span>
+                                    </>
+                                )}
+                            </button>
+
+                            <button
+                                onClick={exportJSONL}
+                                className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 px-3 py-2 rounded-lg text-xs font-medium transition-colors border border-slate-700 whitespace-nowrap"
+                                title="Export as JSONL for fine-tuning (ground truth only)"
+                            >
+                                <FileJson size={14} />
+                                <span className="hidden sm:inline">JSONL</span>
+                            </button>
+
+                            {/* Training Dataset Export Dropdown */}
+                            <div className="relative">
+                                <button
+                                    onClick={() => setShowTrainingMenu(!showTrainingMenu)}
+                                    className="flex items-center gap-2 bg-gradient-to-r from-purple-600/20 to-indigo-600/20 hover:from-purple-500/30 hover:to-indigo-500/30 text-purple-300 px-3 py-2 rounded-lg text-xs font-medium transition-colors border border-purple-500/30 whitespace-nowrap"
+                                >
+                                    <BookOpen size={14} />
+                                    <span className="hidden sm:inline">Training</span>
+                                    <ChevronDown size={12} className={`transition-transform ${showTrainingMenu ? 'rotate-180' : ''}`} />
+                                </button>
+                                {showTrainingMenu && (
+                                    <>
+                                        <div
+                                            className="fixed inset-0 z-40"
+                                            onClick={() => setShowTrainingMenu(false)}
+                                        />
+                                        <div className="absolute right-0 top-full mt-2 w-52 bg-slate-900 border border-slate-700 rounded-lg shadow-xl z-50">
+                                            <div className="text-[10px] uppercase font-bold text-slate-500 px-3 py-2 border-b border-slate-800">
+                                                Export for Training
+                                            </div>
+                                            <button
+                                                onClick={() => { exportRL(); setShowTrainingMenu(false); }}
+                                                className="w-full text-left px-3 py-2.5 text-xs text-slate-300 hover:bg-purple-500/10 flex items-center gap-2 border-b border-slate-800"
+                                            >
+                                                <span className="w-5 h-5 rounded bg-orange-500/20 text-orange-400 flex items-center justify-center text-[10px] font-bold">RL</span>
+                                                <div>
+                                                    <div className="font-medium">Reward Model</div>
+                                                    <div className="text-[10px] text-slate-500">All outputs with scores</div>
+                                                </div>
+                                            </button>
+                                            <button
+                                                onClick={() => { exportSFT(7); setShowTrainingMenu(false); }}
+                                                className="w-full text-left px-3 py-2.5 text-xs text-slate-300 hover:bg-purple-500/10 flex items-center gap-2 border-b border-slate-800"
+                                            >
+                                                <span className="w-5 h-5 rounded bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[10px] font-bold">SFT</span>
+                                                <div>
+                                                    <div className="font-medium">Supervised Fine-tuning</div>
+                                                    <div className="text-[10px] text-slate-500">Approved ≥7 only</div>
+                                                </div>
+                                            </button>
+                                            <button
+                                                onClick={() => { exportDPO(); setShowTrainingMenu(false); }}
+                                                className="w-full text-left px-3 py-2.5 text-xs text-slate-300 hover:bg-purple-500/10 flex items-center gap-2"
+                                            >
+                                                <span className="w-5 h-5 rounded bg-blue-500/20 text-blue-400 flex items-center justify-center text-[10px] font-bold">DPO</span>
+                                                <div>
+                                                    <div className="font-medium">Preference Pairs</div>
+                                                    <div className="text-[10px] text-slate-500">Best vs worst pairs</div>
+                                                </div>
+                                            </button>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+
+                            <button
+                                onClick={exportExcel}
+                                className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-green-300 px-3 py-2 rounded-lg text-xs font-medium transition-colors border border-slate-700 whitespace-nowrap"
+                                title="Export all data as Excel spreadsheet"
+                            >
+                                <FileSpreadsheet size={14} />
+                                <span className="hidden sm:inline">Excel</span>
+                            </button>
+                            <button
+                                onClick={exportCSV}
+                                className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-emerald-300 px-3 py-2 rounded-lg text-xs font-medium transition-colors border border-slate-700 whitespace-nowrap"
+                                title="Export all data as CSV spreadsheet"
+                            >
+                                <Download size={14} />
+                                <span className="hidden sm:inline">CSV</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            {/* Table Container */}
-            <div className="flex-1 overflow-auto custom-scrollbar p-4">
-                <div className="min-w-full inline-block align-middle">
-                    <div className="border border-slate-800 rounded-lg overflow-hidden">
-                        <table className="min-w-full divide-y divide-slate-800">
-                            <thead className="bg-slate-900">
-                                <tr>
-                                    <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider w-10">#</th>
-                                    <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider w-64">Task / Source</th>
-                                    {sortedConfigs.filter(c => visibleColumns.includes(c.id)).map(conf => {
-                                        const stats = modelStats[conf.id];
-                                        return (
-                                            <th key={conf.id} scope="col" className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider min-w-[300px]">
-                                                <div className="flex flex-col gap-1">
-                                                    <div className="flex items-center gap-2">
-                                                        <span className={stats?.isConsistent ? "text-indigo-300" : ""}>{conf.name}</span>
-                                                        {stats?.isConsistent && (
-                                                            <div className="group relative">
-                                                                <Target size={14} className="text-emerald-400 cursor-help" />
-                                                                <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block bg-slate-800 text-xs text-white px-2 py-1 rounded border border-slate-700 shadow-xl whitespace-nowrap z-50 pointer-events-none">
-                                                                    Consistently close to {conf.maxWords} words
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                    <div className="flex items-center gap-2 text-[10px] normal-case tracking-normal font-mono text-slate-500">
-                                                        <span>{conf.model}</span>
-                                                        <span className="opacity-30">|</span>
-                                                        <span>Avg: {stats?.avgWords || 0}w</span>
-                                                    </div>
-                                                </div>
-                                            </th>
-                                        );
-                                    })}
-                                </tr>
-                            </thead>
-                            <tbody className="bg-slate-950 divide-y divide-slate-800">
-                                {filteredItems.length > 0 ? (
-                                    filteredItems.map((item, idx) => (
-                                        <React.Fragment key={item.id}>
-                                            {/* Summary Row */}
-                                            <tr className={`hover:bg-slate-900/50 transition-colors ${expandedRow === item.id ? 'bg-slate-900/30' : ''}`}>
-                                                <td className="px-4 py-4 whitespace-nowrap text-xs text-slate-500 font-mono">
-                                                    <button onClick={() => setExpandedRow(expandedRow === item.id ? null : item.id)}>
-                                                        {expandedRow === item.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                                    </button>
-                                                </td>
-                                                <td className="px-4 py-4 text-sm text-slate-300 align-top cursor-pointer" onClick={() => setExpandedRow(expandedRow === item.id ? null : item.id)}>
-                                                    {item.title && (
-                                                        <div className="font-bold text-slate-200 text-xs mb-1">{item.title}</div>
-                                                    )}
-                                                    <div className="line-clamp-3 font-mono text-xs text-slate-400">
-                                                        {item.sourceText}
-                                                    </div>
-                                                    <div className={`mt-2 text-[10px] uppercase font-bold ${item.status === 'done' ? 'text-emerald-500' : 'text-amber-500'}`}>
-                                                        {item.status}
-                                                    </div>
-                                                </td>
-                                                {sortedConfigs.filter(c => visibleColumns.includes(c.id)).map(conf => {
-                                                    const output = item.results[conf.id];
-                                                    const evalData = item.evaluations[conf.id] || { score: 0, note: '', isGroundTruth: false };
+            {/* Model Comparison Dashboard */}
+            {showComparison && (
+                <div className="border-b border-slate-800 bg-slate-900/50 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                            <Star size={14} className="text-amber-400" />
+                            Model Comparison Dashboard
+                        </h3>
+                        <span className="text-[10px] text-slate-500">
+                            {Object.values(comparisonStats).reduce((a, s) => a + s.totalEvaluated, 0)} total evaluations
+                        </span>
+                    </div>
 
-                                                    return (
-                                                        <td key={conf.id} className="px-4 py-4 align-top border-l border-slate-800/50">
-                                                            {output ? (
-                                                                <div className="flex flex-col gap-2 h-full">
-                                                                    <div className="text-xs text-slate-300 line-clamp-4 mb-2 prose prose-invert prose-xs max-w-none">
-                                                                        {output.startsWith('Error:') ? <span className="text-red-400">{output}</span> : output}
-                                                                    </div>
+                    <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(config.activeRunConfigs.length, 4)}, 1fr)` }}>
+                        {Object.values(comparisonStats)
+                            .sort((a, b) => b.avgScore - a.avgScore)
+                            .map((stat, idx) => {
+                                const isLeader = idx === 0 && stat.avgScore > 0;
+                                const isLast = idx === Object.values(comparisonStats).length - 1 && stat.avgScore > 0;
 
-                                                                    {/* Grading Controls Mini */}
-                                                                    <div className="mt-auto flex items-center justify-between bg-slate-900/50 p-1.5 rounded border border-slate-800">
-                                                                        <div className="flex items-center gap-1">
-                                                                            <span className="text-[10px] text-slate-500 uppercase font-bold">Grade:</span>
-                                                                            <input
-                                                                                type="number"
-                                                                                min="1" max="10"
-                                                                                value={evalData.score || ''}
-                                                                                onChange={(e) => onUpdateEvaluation(item.id, conf.id, 'score', validateScore(parseInt(e.target.value)))}
-                                                                                className="w-10 bg-slate-800 border border-slate-700 text-center text-xs rounded focus:ring-1 focus:ring-indigo-500"
-                                                                            />
-                                                                        </div>
-                                                                        <div className="flex items-center gap-1">
-                                                                            <button
-                                                                                onClick={() => judgeWithLLM(item.id, conf.id)}
-                                                                                disabled={judgingItemId === item.id + '-' + conf.id}
-                                                                                className="p-1 rounded transition-colors text-purple-400 hover:text-purple-300 hover:bg-purple-500/10 disabled:opacity-50"
-                                                                                title="Use LLM Judge"
-                                                                            >
-                                                                                {judgingItemId === item.id + '-' + conf.id ? (
-                                                                                    <div className="w-3.5 h-3.5 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin" />
-                                                                                ) : (
-                                                                                    <Target size={14} />
-                                                                                )}
-                                                                            </button>
-                                                                            <button
-                                                                                onClick={() => onUpdateEvaluation(item.id, conf.id, 'isGroundTruth', !evalData.isGroundTruth)}
-                                                                                className={`p-1 rounded transition-colors ${evalData.isGroundTruth ? 'text-yellow-400 bg-yellow-400/10' : 'text-slate-600 hover:text-slate-400'}`}
-                                                                                title="Mark as Ground Truth (Best Response)"
-                                                                            >
-                                                                                <Star size={14} fill={evalData.isGroundTruth ? "currentColor" : "none"} />
-                                                                            </button>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                            ) : (
-                                                                <div className="h-full flex items-center justify-center">
-                                                                    <span className="w-2 h-2 bg-slate-700 rounded-full animate-pulse"></span>
-                                                                </div>
-                                                            )}
-                                                        </td>
-                                                    );
-                                                })}
-                                            </tr>
-                                            {/* Expanded Detail Row */}
-                                            {
-                                                expandedRow === item.id && (
-                                                    <tr className="bg-slate-900/20">
-                                                        <td colSpan={2 + sortedConfigs.filter(c => visibleColumns.includes(c.id)).length} className="px-4 py-4">
-                                                            <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
-                                                                <div className="mb-4">
-                                                                    <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Full Source Text</h4>
-                                                                    {item.title && <h5 className="text-sm font-bold text-slate-300 mb-1">{item.title}</h5>}
-                                                                    <div className="bg-slate-900 p-3 rounded text-sm text-slate-300 font-mono whitespace-pre-wrap border border-slate-800">
-                                                                        {item.sourceText}
-                                                                    </div>
-                                                                </div>
-
-                                                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                                                                    {sortedConfigs.filter(c => visibleColumns.includes(c.id)).map(conf => {
-                                                                        const evalData = item.evaluations[conf.id] || { score: 0, note: '', isGroundTruth: false };
-                                                                        return (
-                                                                            <div key={conf.id} className={`border rounded-lg p-4 ${evalData.isGroundTruth ? 'border-yellow-500/30 bg-yellow-500/5' : 'border-slate-800 bg-slate-900/50'}`}>
-                                                                                <div className="flex justify-between items-center mb-3 border-b border-slate-800 pb-2">
-                                                                                    <div>
-                                                                                        <span className="text-sm font-bold text-indigo-300 block">{conf.name}</span>
-                                                                                        <span className="text-[10px] text-slate-500 font-mono">{conf.model}</span>
-                                                                                    </div>
-                                                                                    <div className="flex items-center gap-2">
-                                                                                        {evalData.isGroundTruth && <span className="text-[10px] bg-yellow-500/20 text-yellow-300 px-2 py-0.5 rounded border border-yellow-500/30">GROUND TRUTH</span>}
-                                                                                        <button
-                                                                                            onClick={() => onUpdateEvaluation(item.id, conf.id, 'isGroundTruth', !evalData.isGroundTruth)}
-                                                                                            className={`p-1 rounded transition-colors ${evalData.isGroundTruth ? 'text-yellow-400 bg-yellow-400/10' : 'text-slate-600 hover:text-slate-400'}`}
-                                                                                            title={evalData.isGroundTruth ? "Unmark Ground Truth" : "Mark as Ground Truth"}
-                                                                                        >
-                                                                                            <Star size={16} fill={evalData.isGroundTruth ? "currentColor" : "none"} />
-                                                                                        </button>
-                                                                                    </div>
-                                                                                </div>
-                                                                                <div className="prose prose-invert prose-sm max-w-none mb-4">
-                                                                                    <ReactMarkdown>{item.results[conf.id] || ''}</ReactMarkdown>
-                                                                                </div>
-
-                                                                                <div className="space-y-2 pt-3 border-t border-slate-800/50">
-                                                                                    <div className="flex gap-4">
-                                                                                        <div className="flex-1">
-                                                                                            <label className="block text-[10px] text-slate-500 uppercase font-bold mb-1">Evaluator Score (1-10)</label>
-                                                                                            <input
-                                                                                                type="range" min="1" max="10"
-                                                                                                value={evalData.score || 1}
-                                                                                                onChange={(e) => onUpdateEvaluation(item.id, conf.id, 'score', validateScore(parseInt(e.target.value)))}
-                                                                                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                                                                                            />
-                                                                                            <div className="flex justify-between text-[10px] text-slate-500 mt-1">
-                                                                                                <span>1</span>
-                                                                                                <span className="text-indigo-300 font-bold text-sm">{evalData.score || '-'}</span>
-                                                                                                <span>10</span>
-                                                                                            </div>
-                                                                                        </div>
-                                                                                    </div>
-                                                                                    <div>
-                                                                                        <label className="block text-[10px] text-slate-500 uppercase font-bold mb-1">Notes / Corrections</label>
-                                                                                        <textarea
-                                                                                            value={evalData.note || ''}
-                                                                                            onChange={(e) => onUpdateEvaluation(item.id, conf.id, 'note', e.target.value)}
-                                                                                            placeholder="Add comments or improved phrasing..."
-                                                                                            className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-slate-300 focus:ring-1 focus:ring-indigo-500 min-h-[60px]"
-                                                                                        />
-                                                                                    </div>
-                                                                                </div>
-                                                                            </div>
-                                                                        );
-                                                                    })}
-                                                                </div>
-                                                            </div>
-                                                        </td>
-                                                    </tr>
-                                                )
-                                            }
-                                        </React.Fragment>
-                                    ))
-                                ) : (
-                                    <tr>
-                                        <td colSpan={2 + config.activeRunConfigs.length} className="px-4 py-12 text-center text-slate-500">
-                                            <div className="flex flex-col items-center gap-2">
-                                                <Search size={24} className="opacity-20" />
-                                                <p className="text-sm">No items found matching "{searchTerm}"</p>
+                                return (
+                                    <div
+                                        key={stat.configId}
+                                        className={`relative rounded-lg border p-3 ${isLeader
+                                            ? 'border-amber-500/50 bg-amber-500/5'
+                                            : isLast
+                                                ? 'border-red-500/30 bg-red-500/5'
+                                                : 'border-slate-700 bg-slate-800/50'
+                                            }`}
+                                    >
+                                        {/* Rank Badge */}
+                                        {idx < 3 && stat.avgScore > 0 && (
+                                            <div className={`absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${idx === 0 ? 'bg-amber-500 text-amber-950' :
+                                                idx === 1 ? 'bg-slate-400 text-slate-900' :
+                                                    'bg-orange-600 text-orange-100'
+                                                }`}>
+                                                #{idx + 1}
                                             </div>
-                                        </td>
-                                    </tr>
-                                )}
-                            </tbody>
-                        </table>
+                                        )}
+
+                                        {/* Model Name */}
+                                        <div className="text-xs font-medium text-slate-200 truncate mb-2">{stat.name}</div>
+
+                                        {/* Stats Grid */}
+                                        <div className="grid grid-cols-2 gap-2 mb-2">
+                                            <div className="text-center">
+                                                <div className={`text-xl font-bold ${stat.avgScore >= 8 ? 'text-emerald-400' :
+                                                    stat.avgScore >= 6 ? 'text-amber-400' :
+                                                        stat.avgScore > 0 ? 'text-red-400' : 'text-slate-500'
+                                                    }`}>
+                                                    {stat.avgScore > 0 ? stat.avgScore.toFixed(1) : '—'}
+                                                </div>
+                                                <div className="text-[9px] text-slate-500 uppercase">Avg Score</div>
+                                            </div>
+                                            <div className="text-center">
+                                                <div className="text-xl font-bold text-indigo-400">
+                                                    {stat.totalEvaluated > 0 ? Math.round((stat.wins / stat.totalEvaluated) * 100) : 0}%
+                                                </div>
+                                                <div className="text-[9px] text-slate-500 uppercase">Win Rate</div>
+                                            </div>
+                                        </div>
+
+                                        {/* Score Distribution Bar */}
+                                        <div className="flex h-1.5 rounded-full overflow-hidden bg-slate-700 mb-2">
+                                            {stat.totalEvaluated > 0 && (
+                                                <>
+                                                    <div
+                                                        className="bg-red-500"
+                                                        style={{ width: `${(stat.distribution['1-3'] / stat.totalEvaluated) * 100}%` }}
+                                                        title={`1-3: ${stat.distribution['1-3']}`}
+                                                    />
+                                                    <div
+                                                        className="bg-amber-500"
+                                                        style={{ width: `${(stat.distribution['4-6'] / stat.totalEvaluated) * 100}%` }}
+                                                        title={`4-6: ${stat.distribution['4-6']}`}
+                                                    />
+                                                    <div
+                                                        className="bg-emerald-400"
+                                                        style={{ width: `${(stat.distribution['7-8'] / stat.totalEvaluated) * 100}%` }}
+                                                        title={`7-8: ${stat.distribution['7-8']}`}
+                                                    />
+                                                    <div
+                                                        className="bg-emerald-500"
+                                                        style={{ width: `${(stat.distribution['9-10'] / stat.totalEvaluated) * 100}%` }}
+                                                        title={`9-10: ${stat.distribution['9-10']}`}
+                                                    />
+                                                </>
+                                            )}
+                                        </div>
+
+                                        {/* Best/Worst Counts */}
+                                        <div className="flex justify-between text-[10px]">
+                                            <span className="text-emerald-400">
+                                                <ThumbsUp size={10} className="inline mr-0.5" />
+                                                {stat.bestCount} best
+                                            </span>
+                                            <span className="text-slate-500">{stat.totalEvaluated} eval</span>
+                                            <span className="text-red-400">
+                                                {stat.worstCount} worst
+                                                <ThumbsDown size={10} className="inline ml-0.5" />
+                                            </span>
+                                        </div>
+                                    </div>
+                                );
+                            })}
                     </div>
                 </div>
-            </div >
-        </div >
+            )}
+
+            {/* Table Container */}
+            <div className="flex-1 overflow-hidden p-4">
+                <div className="h-full overflow-auto border border-slate-800 rounded-lg" style={{ scrollbarColor: '#475569 #1e293b', scrollbarWidth: 'thin' }}>
+                    <table className="min-w-full divide-y divide-slate-800">
+                        <thead className="bg-slate-900 sticky top-0 z-10">
+                            <tr>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider w-10">#</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider w-64">Task / Source</th>
+                                {sortedConfigs.filter(c => visibleColumns.includes(c.id)).map(conf => {
+                                    const stats = modelStats[conf.id];
+                                    return (
+                                        <th key={conf.id} scope="col" className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider min-w-[300px]">
+                                            <div className="flex flex-col gap-1">
+                                                <div className="flex items-center gap-2">
+                                                    <span className={stats?.isConsistent ? "text-indigo-300" : ""}>{conf.name}</span>
+                                                    {stats?.isConsistent && (
+                                                        <div className="group relative">
+                                                            <Target size={14} className="text-emerald-400 cursor-help" />
+                                                            <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block bg-slate-800 text-xs text-white px-2 py-1 rounded border border-slate-700 shadow-xl whitespace-nowrap z-50 pointer-events-none">
+                                                                Consistently close to {conf.maxWords} words
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-2 text-[10px] normal-case tracking-normal font-mono text-slate-500">
+                                                    <span>{conf.model}</span>
+                                                    <span className="opacity-30">|</span>
+                                                    <span>Avg: {stats?.avgWords || 0}w</span>
+                                                </div>
+                                            </div>
+                                        </th>
+                                    );
+                                })}
+                            </tr>
+                        </thead>
+                        <tbody className="bg-slate-950 divide-y divide-slate-800">
+                            {filteredItems.length > 0 ? (
+                                filteredItems.map((item, idx) => (
+                                    <React.Fragment key={item.id}>
+                                        {/* Summary Row */}
+                                        <tr className={`hover:bg-slate-900/50 transition-colors ${expandedRow === item.id ? 'bg-slate-900/30' : ''}`}>
+                                            <td className="px-4 py-4 whitespace-nowrap text-xs text-slate-500 font-mono">
+                                                <button onClick={() => setExpandedRow(expandedRow === item.id ? null : item.id)}>
+                                                    {expandedRow === item.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                                </button>
+                                            </td>
+                                            <td className="px-4 py-4 text-sm text-slate-300 align-top cursor-pointer" onClick={() => setExpandedRow(expandedRow === item.id ? null : item.id)}>
+                                                {item.title && (
+                                                    <div className="font-bold text-slate-200 text-xs mb-1">{item.title}</div>
+                                                )}
+                                                <div className="line-clamp-3 font-mono text-xs text-slate-400">
+                                                    {item.sourceText}
+                                                </div>
+                                                <div className={`mt-2 text-[10px] uppercase font-bold ${item.status === 'done' ? 'text-emerald-500' : 'text-amber-500'}`}>
+                                                    {item.status}
+                                                </div>
+                                            </td>
+                                            {sortedConfigs.filter(c => visibleColumns.includes(c.id)).map(conf => {
+                                                const output = item.results[conf.id];
+                                                const evalData = item.evaluations[conf.id] || { score: 0, note: '', isGroundTruth: false };
+
+                                                return (
+                                                    <td key={conf.id} className="px-4 py-4 align-top border-l border-slate-800/50">
+                                                        {output ? (
+                                                            <div className="flex flex-col gap-2 h-full">
+                                                                <div className="text-xs text-slate-300 line-clamp-4 mb-2 prose prose-invert prose-xs max-w-none">
+                                                                    {output.startsWith('Error:') ? <span className="text-red-400">{output}</span> : output}
+                                                                </div>
+
+                                                                {/* Grading Controls Mini */}
+                                                                <div className="mt-auto flex items-center justify-between bg-slate-900/50 p-1.5 rounded border border-slate-800">
+                                                                    <div className="flex items-center gap-1">
+                                                                        <span className="text-[10px] text-slate-500 uppercase font-bold">Grade:</span>
+                                                                        <input
+                                                                            type="number"
+                                                                            min="1" max="10"
+                                                                            value={evalData.score || ''}
+                                                                            onChange={(e) => onUpdateEvaluation(item.id, conf.id, 'score', validateScore(parseInt(e.target.value)))}
+                                                                            className="w-10 bg-slate-800 border border-slate-700 text-center text-xs rounded focus:ring-1 focus:ring-indigo-500"
+                                                                        />
+                                                                    </div>
+                                                                    <div className="flex items-center gap-1">
+                                                                        <button
+                                                                            onClick={() => judgeWithLLM(item.id, conf.id)}
+                                                                            disabled={!isJudgeConfigured || judgingItemId === item.id + '-' + conf.id}
+                                                                            className={`p-1 rounded transition-colors ${!isJudgeConfigured ? 'text-slate-600 cursor-not-allowed' : 'text-purple-400 hover:text-purple-300 hover:bg-purple-500/10'} disabled:opacity-50`}
+                                                                            title={!isJudgeConfigured ? 'Configure judge in Settings first' : 'Use LLM Judge'}
+                                                                        >
+                                                                            {judgingItemId === item.id + '-' + conf.id ? (
+                                                                                <div className="w-3.5 h-3.5 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin" />
+                                                                            ) : (
+                                                                                <Target size={14} />
+                                                                            )}
+                                                                        </button>
+                                                                        <button
+                                                                            onClick={() => onUpdateEvaluation(item.id, conf.id, 'isGroundTruth', !evalData.isGroundTruth)}
+                                                                            className={`p-1 rounded transition-colors ${evalData.isGroundTruth ? 'text-yellow-400 bg-yellow-400/10' : 'text-slate-600 hover:text-slate-400'}`}
+                                                                            title="Mark as Ground Truth (Best Response)"
+                                                                        >
+                                                                            <Star size={14} fill={evalData.isGroundTruth ? "currentColor" : "none"} />
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="h-full flex items-center justify-center">
+                                                                <span className="w-2 h-2 bg-slate-700 rounded-full animate-pulse"></span>
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                );
+                                            })}
+                                        </tr>
+                                        {/* Expanded Detail Row */}
+                                        {
+                                            expandedRow === item.id && (
+                                                <tr className="bg-slate-900/20">
+                                                    <td colSpan={2 + sortedConfigs.filter(c => visibleColumns.includes(c.id)).length} className="px-4 py-4">
+                                                        <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
+                                                            <div className="mb-4">
+                                                                <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Full Source Text</h4>
+                                                                {item.title && <h5 className="text-sm font-bold text-slate-300 mb-1">{item.title}</h5>}
+                                                                <div className="bg-slate-900 p-3 rounded text-sm text-slate-300 font-mono whitespace-pre-wrap border border-slate-800">
+                                                                    {item.sourceText}
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                                                {sortedConfigs.filter(c => visibleColumns.includes(c.id)).map(conf => {
+                                                                    const evalData = item.evaluations[conf.id] || { score: 0, note: '', isGroundTruth: false };
+                                                                    return (
+                                                                        <div key={conf.id} className={`border rounded-lg p-4 ${evalData.isGroundTruth ? 'border-yellow-500/30 bg-yellow-500/5' : 'border-slate-800 bg-slate-900/50'}`}>
+                                                                            <div className="flex justify-between items-center mb-3 border-b border-slate-800 pb-2">
+                                                                                <div>
+                                                                                    <span className="text-sm font-bold text-indigo-300 block">{conf.name}</span>
+                                                                                    <span className="text-[10px] text-slate-500 font-mono">{conf.model}</span>
+                                                                                </div>
+                                                                                <div className="flex items-center gap-2">
+                                                                                    {evalData.isGroundTruth && <span className="text-[10px] bg-yellow-500/20 text-yellow-300 px-2 py-0.5 rounded border border-yellow-500/30">GROUND TRUTH</span>}
+                                                                                    <button
+                                                                                        onClick={() => onUpdateEvaluation(item.id, conf.id, 'isGroundTruth', !evalData.isGroundTruth)}
+                                                                                        className={`p-1 rounded transition-colors ${evalData.isGroundTruth ? 'text-yellow-400 bg-yellow-400/10' : 'text-slate-600 hover:text-slate-400'}`}
+                                                                                        title={evalData.isGroundTruth ? "Unmark Ground Truth" : "Mark as Ground Truth"}
+                                                                                    >
+                                                                                        <Star size={16} fill={evalData.isGroundTruth ? "currentColor" : "none"} />
+                                                                                    </button>
+                                                                                </div>
+                                                                            </div>
+                                                                            <div className="prose prose-invert prose-sm max-w-none mb-4">
+                                                                                <ReactMarkdown>{item.results[conf.id] || ''}</ReactMarkdown>
+                                                                            </div>
+
+                                                                            <div className="space-y-2 pt-3 border-t border-slate-800/50">
+                                                                                <div className="flex gap-4">
+                                                                                    <div className="flex-1">
+                                                                                        <label className="block text-[10px] text-slate-500 uppercase font-bold mb-1">Evaluator Score (1-10)</label>
+                                                                                        <input
+                                                                                            type="range" min="1" max="10"
+                                                                                            value={evalData.score || 1}
+                                                                                            onChange={(e) => onUpdateEvaluation(item.id, conf.id, 'score', validateScore(parseInt(e.target.value)))}
+                                                                                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                                                                                        />
+                                                                                        <div className="flex justify-between text-[10px] text-slate-500 mt-1">
+                                                                                            <span>1</span>
+                                                                                            <span className="text-indigo-300 font-bold text-sm">{evalData.score || '-'}</span>
+                                                                                            <span>10</span>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label className="block text-[10px] text-slate-500 uppercase font-bold mb-1">Notes / Corrections</label>
+                                                                                    <textarea
+                                                                                        value={evalData.note || ''}
+                                                                                        onChange={(e) => onUpdateEvaluation(item.id, conf.id, 'note', e.target.value)}
+                                                                                        placeholder="Add comments or improved phrasing..."
+                                                                                        className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-slate-300 focus:ring-1 focus:ring-indigo-500 min-h-[60px]"
+                                                                                    />
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            )
+                                        }
+                                    </React.Fragment>
+                                ))
+                            ) : (
+                                <tr>
+                                    <td colSpan={2 + config.activeRunConfigs.length} className="px-4 py-12 text-center text-slate-500">
+                                        <div className="flex flex-col items-center gap-2">
+                                            <Search size={24} className="opacity-20" />
+                                            <p className="text-sm">No items found matching "{searchTerm}"</p>
+                                        </div>
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
     );
 };
 

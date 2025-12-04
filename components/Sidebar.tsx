@@ -34,6 +34,10 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [fetchedModels, setFetchedModels] = useState<string[]>([]);
 
+  // Judge-specific connection state
+  const [judgeConnectionStatus, setJudgeConnectionStatus] = useState<'idle' | 'checking' | 'success' | 'error'>('idle');
+  const [fetchedJudgeModels, setFetchedJudgeModels] = useState<string[]>([]);
+
   const handleChange = <K extends keyof AppConfig>(key: K, value: AppConfig[K]) => {
     setConfig(prev => ({ ...prev, [key]: value }));
   };
@@ -121,7 +125,52 @@ const Sidebar: React.FC<SidebarProps> = ({
     }
   }, [config.provider]);
 
+  // Check Judge connection and fetch models
+  const checkJudgeConnection = async () => {
+    if (!config.judgeEndpoint?.trim()) return;
+
+    setJudgeConnectionStatus('checking');
+    setFetchedJudgeModels([]);
+
+    try {
+      // Derive models endpoint from chat completions endpoint
+      let urlStr = config.judgeEndpoint.trim();
+      if (urlStr.endsWith('/')) urlStr = urlStr.slice(0, -1);
+      if (urlStr.endsWith('/chat/completions')) {
+        urlStr = urlStr.replace('/chat/completions', '/models');
+      } else if (urlStr.endsWith('/v1')) {
+        urlStr = urlStr + '/models';
+      } else if (!urlStr.endsWith('/models')) {
+        urlStr = urlStr + '/v1/models';
+      }
+
+      const res = await fetch(urlStr);
+      if (res.ok) {
+        const data = await res.json();
+        const modelIds = data.data?.map((m: { id: string }) => m.id) || [];
+        setFetchedJudgeModels(modelIds);
+        setJudgeConnectionStatus('success');
+      } else {
+        setJudgeConnectionStatus('error');
+      }
+    } catch (e) {
+      setJudgeConnectionStatus('error');
+    }
+  };
+
+  const isJudgeEndpointValid = () => {
+    try {
+      if (!config.judgeEndpoint?.trim()) return false;
+      new URL(config.judgeEndpoint);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const judgeEndpointValid = isJudgeEndpointValid();
   const endpointValid = isEndpointValid();
+
 
   // Dynamic prompt preview based on current input or placeholder
   const previewSource = inputText.trim() || "[Your source text will appear here]";
@@ -204,7 +253,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                     }}
                     className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${config.provider === 'gemini' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
                   >
-                    Gemini API
+                    Cloud API
                   </button>
                   <button
                     onClick={() => {
@@ -574,6 +623,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                     </button>
                   </div>
 
+
                   {/* Dedicated Judge Configuration (shown when toggle is off) */}
                   {!config.useMainModelAsJudge && (
                     <div className="space-y-3 p-3 bg-purple-500/5 border border-purple-500/20 rounded-lg">
@@ -587,16 +637,20 @@ const Sidebar: React.FC<SidebarProps> = ({
                         <label className="block text-[10px] text-slate-500 uppercase font-bold mb-1">Provider</label>
                         <div className="flex bg-slate-800 p-1 rounded-lg">
                           <button
-                            onClick={() => handleChange('judgeProvider', 'gemini')}
+                            onClick={() => { handleChange('judgeProvider', 'gemini'); setFetchedJudgeModels([]); setJudgeConnectionStatus('idle'); }}
                             className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${config.judgeProvider === 'gemini'
                               ? 'bg-indigo-600 text-white shadow-sm'
                               : 'text-slate-400 hover:text-slate-200'
                               }`}
                           >
-                            Gemini
+                            Cloud API
                           </button>
                           <button
-                            onClick={() => handleChange('judgeProvider', 'local')}
+                            onClick={() => {
+                              handleChange('judgeProvider', 'local');
+                              // Auto-sync endpoint when switching to local
+                              handleChange('judgeEndpoint', config.localEndpoint);
+                            }}
                             className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${config.judgeProvider === 'local'
                               ? 'bg-emerald-600 text-white shadow-sm'
                               : 'text-slate-400 hover:text-slate-200'
@@ -607,34 +661,134 @@ const Sidebar: React.FC<SidebarProps> = ({
                         </div>
                       </div>
 
-                      {/* Judge Model Selection */}
-                      <div>
-                        <label className="block text-[10px] text-slate-500 uppercase font-bold mb-1">Model</label>
-                        {config.judgeProvider === 'gemini' ? (
-                          <select
-                            value={config.judgeModel || ModelType.FLASH}
-                            onChange={(e) => handleChange('judgeModel', e.target.value)}
-                            className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-3 py-2 text-xs"
-                          >
-                            {Object.values(ModelType).map((model) => (
-                              <option key={model} value={model}>
-                                {model.replace('gemini-', '')}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <input
-                            type="text"
-                            value={config.judgeModel}
-                            onChange={(e) => handleChange('judgeModel', e.target.value)}
-                            placeholder="e.g., llama3, mistral"
-                            className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-3 py-2 text-xs placeholder-slate-600"
-                          />
-                        )}
-                        <p className="text-[9px] text-slate-600 mt-1">
-                          Dedicated model for evaluating batch results
-                        </p>
-                      </div>
+                      {/* LOCAL JUDGE UI */}
+                      {config.judgeProvider === 'local' ? (
+                        <div className="space-y-3">
+                          <div className="text-[10px] text-slate-400 bg-slate-800/50 p-2 rounded border border-slate-700/50">
+                            Using local models from <strong>{config.localEndpoint}</strong>.
+                            <br />
+                            <span className="opacity-70">Configure connection in Playground settings.</span>
+                          </div>
+
+                          {fetchedModels.length > 0 ? (
+                            <div className="space-y-2">
+                              <label className="block text-[10px] text-slate-500 uppercase font-bold">Select Local Model</label>
+                              <div className="max-h-32 overflow-y-auto custom-scrollbar space-y-1 bg-slate-800/50 p-1 rounded-lg border border-slate-800">
+                                {fetchedModels.map(model => (
+                                  <button
+                                    key={model}
+                                    onClick={() => handleChange('judgeModel', model)}
+                                    className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs font-medium transition-all border ${config.judgeModel === model
+                                      ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm'
+                                      : 'bg-slate-800 text-slate-400 border-transparent hover:bg-slate-700 hover:text-slate-200'
+                                      }`}
+                                  >
+                                    <span className="truncate mr-2">{model}</span>
+                                    {config.judgeModel === model && <Check size={12} className="text-emerald-100 flex-shrink-0" />}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2 text-amber-400 text-[10px] bg-amber-500/10 px-2 py-2 rounded border border-amber-500/20">
+                              <AlertCircle size={12} />
+                              <span>No local models found. Check connection in Playground tab.</span>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        /* CLOUD / API JUDGE UI */
+                        <>
+                          {/* Judge Endpoint with Connection Check */}
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-slate-400">
+                              <div className="flex items-center gap-1">
+                                <Server size={12} />
+                                <span className="text-[10px] uppercase font-bold">API Endpoint</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                {judgeConnectionStatus === 'success' && <span className="text-[10px] text-emerald-400 font-bold">Connected</span>}
+                                {judgeConnectionStatus === 'error' && <span className="text-[10px] text-red-400 font-bold">Failed</span>}
+                              </div>
+                            </div>
+                            <div className="flex gap-1">
+                              <input
+                                type="text"
+                                value={config.judgeEndpoint}
+                                onChange={(e) => handleChange('judgeEndpoint', e.target.value)}
+                                placeholder="https://api.openai.com/v1/chat/completions"
+                                className={`flex-1 bg-slate-800 border ${judgeEndpointValid || !config.judgeEndpoint
+                                  ? 'border-slate-700 focus:ring-purple-500'
+                                  : 'border-red-500/50 focus:ring-red-500 text-red-300'
+                                  } text-slate-200 rounded-md px-3 py-2 focus:ring-2 outline-none text-xs font-mono placeholder-slate-600 transition-colors`}
+                              />
+                              <button
+                                onClick={checkJudgeConnection}
+                                disabled={!judgeEndpointValid}
+                                className={`px-2 rounded-md transition-colors ${judgeConnectionStatus === 'success'
+                                  ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-600/30'
+                                  : 'bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400'}`}
+                                title="Test Connection & Fetch Models"
+                              >
+                                {judgeConnectionStatus === 'success' ? <Check size={14} /> : <RefreshCw size={14} className={judgeConnectionStatus === 'checking' ? 'animate-spin' : ''} />}
+                              </button>
+                            </div>
+                            <p className="text-[9px] text-slate-500">Compatible with OpenAI, Anthropic, Gemini, Groq, etc.</p>
+                          </div>
+
+                          {/* Fetched Judge Models List */}
+                          {fetchedJudgeModels.length > 0 && (
+                            <div className="space-y-2 bg-slate-800/50 p-2 rounded-lg border border-slate-800">
+                              <div className="flex justify-between items-center px-1 mb-1">
+                                <span className="text-[10px] text-slate-500 uppercase font-bold">Select Cloud Model</span>
+                                <span className="text-[10px] text-emerald-400 font-mono">{fetchedJudgeModels.length} available</span>
+                              </div>
+                              <div className="max-h-32 overflow-y-auto custom-scrollbar space-y-1">
+                                {fetchedJudgeModels.map(model => (
+                                  <button
+                                    key={model}
+                                    onClick={() => handleChange('judgeModel', model)}
+                                    className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs font-medium transition-all border ${config.judgeModel === model
+                                      ? 'bg-purple-600 text-white border-purple-500 shadow-sm'
+                                      : 'bg-slate-800 text-slate-400 border-transparent hover:bg-slate-700 hover:text-slate-200'
+                                      }`}
+                                  >
+                                    <span className="truncate mr-2">{model}</span>
+                                    {config.judgeModel === model && <Check size={12} className="text-purple-100 flex-shrink-0" />}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Manual Model Input (fallback) */}
+                          <div>
+                            <label className="block text-[10px] text-slate-500 uppercase font-bold mb-1">
+                              {fetchedJudgeModels.length > 0 ? 'Or Enter Manually' : 'Model Name'}
+                            </label>
+                            <input
+                              type="text"
+                              value={config.judgeModel}
+                              onChange={(e) => handleChange('judgeModel', e.target.value)}
+                              placeholder="gpt-4o, claude-3-opus, llama-3-70b"
+                              className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-3 py-2 text-xs placeholder-slate-600"
+                            />
+                          </div>
+                        </>
+                      )}
+
+                      {/* Config Status */}
+                      {config.judgeEndpoint && config.judgeModel ? (
+                        <div className="flex items-center gap-2 text-emerald-400 text-[10px] bg-emerald-500/10 px-2 py-1.5 rounded border border-emerald-500/20">
+                          <Check size={12} />
+                          <span>Judge Ready: <span className="font-mono text-emerald-300">{config.judgeModel}</span></span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 text-amber-400 text-[10px] bg-amber-500/10 px-2 py-1.5 rounded border border-amber-500/20">
+                          <AlertCircle size={12} />
+                          <span>Set endpoint and select model to enable judging</span>
+                        </div>
+                      )}
                     </div>
                   )}
 
