@@ -411,10 +411,21 @@ const InputArea: React.FC<InputAreaProps> = ({
                             }
                         }
 
+                        // Extract reference summary for JSON objects
+                        let referenceSummary: string | undefined = undefined;
+                        if (typeof item === 'object' && item !== null) {
+                            const referenceKeys = ['reference', 'master', 'expected', 'ground_truth', 'groundtruth', 'target', 'gold', 'ideal'];
+                            const foundRefKey = referenceKeys.find(k => k in item && typeof item[k] === 'string');
+                            if (foundRefKey) {
+                                referenceSummary = item[foundRefKey];
+                            }
+                        }
+
                         return {
                             id: crypto.randomUUID(),
                             title: String(title || `${filename} #${idx + 1}`),
                             sourceText: typeof sourceText === 'string' ? sourceText : JSON.stringify(sourceText),
+                            referenceSummary: referenceSummary,
                             status: 'pending' as const,
                             results: {},
                             evaluations: {}

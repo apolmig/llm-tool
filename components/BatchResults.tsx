@@ -129,8 +129,9 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
     }, [items, config.activeRunConfigs, config.runConfigurations]);
 
     // Initialize visible columns with all active run configs on mount/change
+    // Initialize visible columns with all active run configs on mount/change, plus reference
     React.useEffect(() => {
-        setVisibleColumns(config.activeRunConfigs);
+        setVisibleColumns([...config.activeRunConfigs, 'reference']);
     }, [config.activeRunConfigs]);
 
     // Filter items by search term and validation status
@@ -696,6 +697,13 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
                             </button>
                             <div className="absolute right-0 top-full mt-2 w-48 bg-slate-900 border border-slate-800 rounded-lg shadow-xl p-2 hidden group-hover:block z-50">
                                 <div className="text-[10px] uppercase font-bold text-slate-500 mb-2 px-1">Toggle Visibility</div>
+                                <button
+                                    onClick={() => toggleColumn('reference')}
+                                    className="w-full text-left px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800 rounded flex items-center justify-between"
+                                >
+                                    <span className="truncate">Reference / Ground Truth</span>
+                                    {visibleColumns.includes('reference') && <Check size={12} className="text-emerald-400" />}
+                                </button>
                                 {config.runConfigurations.filter(c => config.activeRunConfigs.includes(c.id)).map(c => (
                                     <button
                                         key={c.id}
@@ -1018,6 +1026,11 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
                             <tr>
                                 <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider w-10">#</th>
                                 <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider w-64">Task / Source</th>
+                                {visibleColumns.includes('reference') && (
+                                    <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider w-64 bg-slate-900 border-l border-slate-800">
+                                        Reference / Master
+                                    </th>
+                                )}
                                 {sortedConfigs.filter(c => visibleColumns.includes(c.id)).map(conf => {
                                     const stats = modelStats[conf.id];
                                     return (
@@ -1067,6 +1080,13 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
                                                     {item.status}
                                                 </div>
                                             </td>
+                                            {visibleColumns.includes('reference') && (
+                                                <td className="px-4 py-4 text-sm text-slate-300 align-top border-l border-slate-800 bg-slate-900/30">
+                                                    <div className="text-xs font-mono text-slate-400 whitespace-pre-wrap max-h-[150px] overflow-y-auto custom-scrollbar">
+                                                        {item.referenceSummary || <span className="text-slate-600 italic">No reference provided</span>}
+                                                    </div>
+                                                </td>
+                                            )}
                                             {sortedConfigs.filter(c => visibleColumns.includes(c.id)).map(conf => {
                                                 const output = item.results[conf.id];
                                                 const evalData = item.evaluations[conf.id] || { score: 0, note: '', isGroundTruth: false };
