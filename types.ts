@@ -1,11 +1,14 @@
 
 export enum ModelType {
-  FLASH = 'gemini-2.5-flash',
-  PRO = 'gemini-3-pro-preview',
-  FLASH_LITE = 'gemini-flash-lite-latest'
+  FLASH = 'gemini-2.0-flash-exp',
+  PRO = 'gemini-1.5-pro',
+  GPT4O = 'openai/gpt-4o',
+  GPT4O_MINI = 'openai/gpt-4o-mini',
+  CLAUDE_3_5_SONNET = 'anthropic/claude-3.5-sonnet',
+  LLAMA_3_70B = 'meta-llama/llama-3-70b-instruct'
 }
 
-export type ModelProvider = 'gemini' | 'local';
+export type ModelProvider = 'gemini' | 'local' | 'cloud';
 
 export enum ToneType {
   PROFESSIONAL = 'Professional',
@@ -27,6 +30,9 @@ export interface AppConfig {
   provider: ModelProvider;
   activeModels: string[];
   modelVersion: string;
+  // Cloud / BYOK Configuration
+  cloudEndpoint: string;
+  cloudApiKey: string;
   localEndpoint: string;
   temperature: number;
   topK: number;

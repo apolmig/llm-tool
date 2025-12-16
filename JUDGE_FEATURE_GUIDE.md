@@ -12,8 +12,8 @@ The LLM Judge automatically evaluates generated summaries based on configurable 
 2.  Scroll down to **LLM Judge Settings**.
 3.  **Use Main Config for Judging**:
     *   **Enabled (Default)**: The judge uses the same model and provider that generated the summary. This is useful for self-correction or when you want to test a specific model's ability to evaluate itself.
-    *   **Disabled**: Allows you to specify a *different* model for judging. For example, you can use a small local model (e.g., `mistral`) to generate summaries and a powerful cloud model (e.g., `gemini-1.5-pro`) to judge them.
-4.  **Judge Provider & Model**: (Visible if "Use Main Config" is disabled) Select between Gemini or Local, and specify the model name.
+    *   **Disabled**: Allows you to specify a *different* model for judging. For example, you can use a small local model (e.g., `mistral`) to generate summaries and a powerful cloud model (e.g., `openai/gpt-4o`) to judge them.
+4.  **Judge Provider & Model**: (Visible if "Use Main Config" is disabled) Select between Cloud API or Local, and specify the model name.
 5.  **Evaluation Criteria**:
     *   You can add, remove, or modify criteria.
     *   Each criterion has a **Weight**. The final score is a weighted average.
@@ -43,6 +43,6 @@ The LLM Judge automatically evaluates generated summaries based on configurable 
 
 *   **Scoring Scale**: 0 to 10.
 *   **Providers**:
-    *   **Gemini**: Uses Google's Generative AI SDK.
+    *   **Cloud API**: Connects to any OpenAI-compatible provider (e.g., OpenRouter, OpenAI, Groq) using the configured Base URL and API Key.
     *   **Local**: Connects to any OpenAI-compatible endpoint (e.g., LM Studio, Ollama) at the URL specified in "Endpoint".
 *   **Prompting**: The judge uses a sophisticated prompt that includes the original text, the summary, and the specific criteria descriptions to ensure objective grading.

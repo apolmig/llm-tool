@@ -6,9 +6,10 @@ interface RunConfigPanelProps {
     config: AppConfig;
     setConfig: React.Dispatch<React.SetStateAction<AppConfig>>;
     fetchedModels?: string[];
+    onRefreshModels?: () => void;
 }
 
-const RunConfigPanel: React.FC<RunConfigPanelProps> = ({ config, setConfig, fetchedModels = [] }) => {
+const RunConfigPanel: React.FC<RunConfigPanelProps> = ({ config, setConfig, fetchedModels = [], onRefreshModels }) => {
     const [editingId, setEditingId] = useState<string | null>(null);
 
     const createNewConfig = () => {
@@ -47,10 +48,19 @@ const RunConfigPanel: React.FC<RunConfigPanelProps> = ({ config, setConfig, fetc
 
     // Helper to determine provider based on model name
     const handleModelChange = (id: string, newModel: string) => {
-        let newProvider: 'gemini' | 'local' = 'local';
-        if (Object.values(ModelType).includes(newModel as any) || newModel.startsWith('gemini-')) {
-            newProvider = 'gemini';
-        }
+        // Simple heuristic: If it's in fetched list AND we are in local mode, it's local.
+        // Otherwise assume cloud if not strictly local.
+        // However, generic "Cloud" can be anything.
+        // Best approach: Keep existing provider unless explicitly switched? 
+        // OR: Just set provider to match the current global config provider for simplicity if simpler?
+        // Let's stick to the current config provider for new models usually.
+
+        let newProvider = config.provider; // Default to current global provider
+
+        // If the model name starts with 'gemini-' it's likely cloud/generic
+        // If it was fetched from local endpoint, it should correspond to local provider
+        // But here we might rely on the user to have valid config.
+
         updateConfig(id, { model: newModel, provider: newProvider });
     };
 
@@ -157,22 +167,29 @@ const RunConfigPanel: React.FC<RunConfigPanelProps> = ({ config, setConfig, fetc
 
                                     {/* Model */}
                                     <div>
-                                        <label className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Model</label>
+                                        <div className="flex justify-between items-center mb-1">
+                                            <label className="text-[10px] uppercase font-bold text-slate-500">Model</label>
+                                            {onRefreshModels && (
+                                                <button
+                                                    onClick={(e) => { e.preventDefault(); onRefreshModels(); }}
+                                                    className="text-[10px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                                                    title="Refresh Models"
+                                                >
+                                                    Refresh
+                                                </button>
+                                            )}
+                                        </div>
                                         <select
                                             value={conf.model}
                                             onChange={(e) => handleModelChange(conf.id, e.target.value)}
                                             className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 focus:ring-1 focus:ring-indigo-500 outline-none"
                                         >
-                                            <optgroup label="Gemini">
-                                                {Object.values(ModelType).map(m => <option key={m} value={m}>{m}</option>)}
+                                            <optgroup label="Available Models">
+                                                {fetchedModels.map(m => <option key={m} value={m}>{m}</option>)}
+                                                {!fetchedModels.length && Object.values(ModelType).map(m => <option key={m} value={m}>{m}</option>)}
                                             </optgroup>
-                                            {fetchedModels.length > 0 && (
-                                                <optgroup label="Local (LM Studio)">
-                                                    {fetchedModels.map(m => <option key={m} value={m}>{m}</option>)}
-                                                </optgroup>
-                                            )}
                                             {/* Fallback for custom/manual entries */}
-                                            {!Object.values(ModelType).includes(conf.model as any) && !fetchedModels.includes(conf.model) && (
+                                            {!fetchedModels.includes(conf.model) && !Object.values(ModelType).includes(conf.model as any) && (
                                                 <option value={conf.model}>{conf.model}</option>
                                             )}
                                         </select>

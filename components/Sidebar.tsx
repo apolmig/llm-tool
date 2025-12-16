@@ -80,31 +80,32 @@ const Sidebar: React.FC<SidebarProps> = ({
     }
 
     try {
-      // Intelligent endpoint derivation
-      let urlStr = config.localEndpoint;
-      try {
-        // Remove trailing slash
-        if (urlStr.endsWith('/')) urlStr = urlStr.slice(0, -1);
+      let urlStr = config.provider === 'cloud' ? config.cloudEndpoint : config.localEndpoint;
+      if (!urlStr) return;
 
-        // Convert chat completions endpoint to models endpoint
+      try {
+        if (urlStr.endsWith('/')) urlStr = urlStr.slice(0, -1);
         if (urlStr.endsWith('/chat/completions')) {
           urlStr = urlStr.replace('/chat/completions', '/models');
         } else if (urlStr.endsWith('/v1')) {
           urlStr = urlStr + '/models';
         } else if (!urlStr.endsWith('/models')) {
-          // Try standard v1 path if just a base host is provided
-          urlStr = urlStr + '/v1/models';
+          urlStr = urlStr + (config.provider === 'cloud' && !urlStr.includes('/v1') ? '/v1/models' : '/models');
         }
       } catch (e) {
-        urlStr = config.localEndpoint + '/models';
+        // Fallback
       }
 
-      const res = await fetch(urlStr);
+      const headers: Record<string, string> = {};
+      if (config.provider === 'cloud' && config.cloudApiKey) {
+        headers['Authorization'] = `Bearer ${config.cloudApiKey}`;
+      }
+
+      const res = await fetch(urlStr, { headers });
       if (res.ok) {
         const data = await res.json();
         setConnectionStatus('success');
 
-        // Parse standard OpenAI/Ollama model list format
         if (data && data.data && Array.isArray(data.data)) {
           const modelIds = data.data.map((m: any) => m.id).sort();
           setFetchedModels(modelIds);
@@ -223,7 +224,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {viewMode === 'batch' ? (
-        <RunConfigPanel config={config} setConfig={setConfig} fetchedModels={fetchedModels} />
+        <RunConfigPanel config={config} setConfig={setConfig} fetchedModels={fetchedModels} onRefreshModels={() => checkConnection(false)} />
       ) : (
         <>
           {activeTab === 'history' ? (
@@ -248,10 +249,16 @@ const Sidebar: React.FC<SidebarProps> = ({
                 <div className="flex bg-slate-800 p-1 rounded-lg">
                   <button
                     onClick={() => {
-                      handleChange('provider', 'gemini');
-                      handleChange('activeModels', [ModelType.FLASH]);
+                      handleChange('provider', 'cloud');
+                      // Reset models when switching to cloud initially if empty
+                      if (!config.cloudEndpoint) {
+                        handleChange('cloudEndpoint', 'https://openrouter.ai/api/v1');
+                      }
+                      if (config.activeModels.some(m => !m.includes('/'))) {
+                        handleChange('activeModels', []);
+                      }
                     }}
-                    className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${config.provider === 'gemini' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                    className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${config.provider === 'cloud' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
                   >
                     Cloud API
                   </button>
@@ -282,22 +289,9 @@ const Sidebar: React.FC<SidebarProps> = ({
                   </span>
                 </div>
 
+                {/* Cloud & Local share similar UI now */}
                 {config.provider === 'gemini' ? (
-                  <div className="space-y-2 bg-slate-800/50 p-2 rounded-lg border border-slate-800">
-                    {Object.values(ModelType).map((model) => (
-                      <button
-                        key={model}
-                        onClick={() => toggleModel(model)}
-                        className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs font-medium transition-all border ${config.activeModels.includes(model)
-                          ? 'bg-indigo-600 text-white border-indigo-500 shadow-lg shadow-indigo-900/20'
-                          : 'bg-slate-800 text-slate-400 border-transparent hover:bg-slate-700 hover:text-slate-200'
-                          }`}
-                      >
-                        {model.replace('gemini-', '').replace('-latest', '').replace('-preview', '')}
-                        {config.activeModels.includes(model) && <Check size={12} className="text-indigo-100" />}
-                      </button>
-                    ))}
-                  </div>
+                  null /* Legacy Gemini removed from specific UI block, or kept if provider='gemini' still possible programmatically but UI hides it */
                 ) : (
                   <div className="space-y-3">
                     {/* Fetched Models List */}
@@ -370,11 +364,49 @@ const Sidebar: React.FC<SidebarProps> = ({
                       </div>
                     )}
 
-                    <div className="space-y-1 mt-3 pt-3 border-t border-slate-800">
+                    <div className="space-y-2 mt-3 pt-3 border-t border-slate-800">
+                      {/* Cloud Specific: API Key */}
+                      {config.provider === 'cloud' && (
+                        <div className="space-y-3">
+                          <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                            {[
+                              { name: 'OpenRouter', url: 'https://openrouter.ai/api/v1' },
+                              { name: 'OpenAI', url: 'https://api.openai.com/v1' },
+                              { name: 'Groq', url: 'https://api.groq.com/openai/v1' },
+                              { name: 'DeepSeek', url: 'https://api.deepseek.com' },
+                            ].map(preset => (
+                              <button
+                                key={preset.name}
+                                onClick={() => handleChange('cloudEndpoint', preset.url)}
+                                className={`px-2 py-1 text-[10px] rounded border transition-colors whitespace-nowrap ${config.cloudEndpoint === preset.url
+                                  ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
+                                  : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700 hover:text-slate-200'
+                                  }`}
+                              >
+                                {preset.name}
+                              </button>
+                            ))}
+                          </div>
+
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-1 text-slate-400">
+                              <span className="text-[10px] uppercase font-bold">API Key</span>
+                            </div>
+                            <input
+                              type="password"
+                              value={config.cloudApiKey}
+                              onChange={(e) => handleChange('cloudApiKey', e.target.value)}
+                              placeholder="sk-..."
+                              className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-3 py-2 focus:ring-1 focus:ring-indigo-500 outline-none text-xs font-mono placeholder-slate-600"
+                            />
+                          </div>
+                        </div>
+                      )}
+
                       <div className="flex items-center justify-between text-slate-400">
                         <div className="flex items-center gap-1">
                           <Server size={12} />
-                          <span className="text-[10px] uppercase font-bold">Endpoint</span>
+                          <span className="text-[10px] uppercase font-bold">{config.provider === 'cloud' ? 'Base URL' : 'Endpoint'}</span>
                         </div>
                         <div className="flex items-center gap-1">
                           {connectionStatus === 'success' && <span className="text-[10px] text-emerald-400 font-bold">Connected</span>}
@@ -384,11 +416,11 @@ const Sidebar: React.FC<SidebarProps> = ({
                       <div className="flex gap-1">
                         <input
                           type="text"
-                          value={config.localEndpoint}
-                          onChange={(e) => handleChange('localEndpoint', e.target.value)}
-                          placeholder="http://localhost:1234/v1/chat/completions"
+                          value={config.provider === 'cloud' ? config.cloudEndpoint : config.localEndpoint}
+                          onChange={(e) => handleChange(config.provider === 'cloud' ? 'cloudEndpoint' : 'localEndpoint', e.target.value)}
+                          placeholder={config.provider === 'cloud' ? "https://openrouter.ai/api/v1" : "http://localhost:1234/v1/chat/completions"}
                           className={`flex-1 bg-slate-800 border ${endpointValid
-                            ? 'border-slate-700 focus:ring-emerald-500'
+                            ? 'border-slate-700 focus:ring-emerald-500' // TODO: Color based on provider
                             : 'border-red-500/50 focus:ring-red-500 text-red-300'
                             } text-slate-200 rounded-md px-3 py-2 focus:ring-2 outline-none text-xs font-mono placeholder-slate-600 transition-colors`}
                         />
@@ -401,12 +433,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                           {connectionStatus === 'success' ? <Check size={14} /> : <RefreshCw size={14} className={connectionStatus === 'idle' ? '' : 'animate-spin'} />}
                         </button>
                       </div>
-                      {!endpointValid && (
-                        <div className="flex items-center gap-1 text-red-400 mt-1">
-                          <AlertCircle size={10} />
-                          <span className="text-[10px]">Invalid URL format</span>
-                        </div>
-                      )}
                     </div>
                   </div>
                 )}
@@ -637,8 +663,8 @@ const Sidebar: React.FC<SidebarProps> = ({
                         <label className="block text-[10px] text-slate-500 uppercase font-bold mb-1">Provider</label>
                         <div className="flex bg-slate-800 p-1 rounded-lg">
                           <button
-                            onClick={() => { handleChange('judgeProvider', 'gemini'); setFetchedJudgeModels([]); setJudgeConnectionStatus('idle'); }}
-                            className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${config.judgeProvider === 'gemini'
+                            onClick={() => { handleChange('judgeProvider', 'cloud'); setFetchedJudgeModels([]); setJudgeConnectionStatus('idle'); }}
+                            className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${config.judgeProvider === 'cloud'
                               ? 'bg-indigo-600 text-white shadow-sm'
                               : 'text-slate-400 hover:text-slate-200'
                               }`}

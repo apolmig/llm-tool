@@ -5,13 +5,16 @@ import InputArea from './components/InputArea';
 import OutputArea from './components/OutputArea';
 import BatchResults from './components/BatchResults';
 import { AppConfig, ModelType, ToneType, FormatType, HistoryItem, ViewMode, BatchItem } from './types';
-import { generateSummary, buildPrompt, evaluateSummary } from './services/geminiService';
+import { generateSummary, buildPrompt, evaluateSummary } from './services/llmService';
 import { PanelLeftOpen, PanelLeftClose } from 'lucide-react';
 
 const DEFAULT_CONFIG: AppConfig = {
-  provider: 'gemini',
+  provider: 'cloud',
   activeModels: [ModelType.FLASH],
   modelVersion: '',
+  // Default Cloud Config (OpenRouter)
+  cloudEndpoint: 'https://openrouter.ai/api/v1',
+  cloudApiKey: '',
   localEndpoint: 'http://localhost:1234/v1/chat/completions', // LM Studio Default
   temperature: 0.5,
   topK: 40,
@@ -233,14 +236,39 @@ const App: React.FC = () => {
 
             // Skip evaluation if no judge model is selected/available
             if (judgeModel) {
+              // Determine correct endpoint and key for Judge
+              let currentJudgeEndpoint = config.localEndpoint;
+              let currentJudgeKey = '';
+
+              if (judgeProvider === 'cloud') {
+                // Use configured cloud Endpoint/Key
+                if (config.useMainModelAsJudge) {
+                  // Main model is cloud -> use main cloud config
+                  currentJudgeEndpoint = config.cloudEndpoint;
+                  currentJudgeKey = config.cloudApiKey;
+                } else {
+                  // Dedicated judge is cloud
+                  currentJudgeEndpoint = config.judgeEndpoint || config.cloudEndpoint;
+                  currentJudgeKey = config.cloudApiKey;
+                }
+              } else {
+                // Local
+                if (config.useMainModelAsJudge) {
+                  currentJudgeEndpoint = config.localEndpoint;
+                } else {
+                  currentJudgeEndpoint = config.judgeEndpoint || config.localEndpoint;
+                }
+              }
+
               const evaluation = await evaluateSummary(
                 item.sourceText,
                 result,
                 config.judgeCriteria,
                 judgeProvider,
                 judgeModel,
-                config.localEndpoint,
-                item.referenceSummary // Pass reference for comparison
+                currentJudgeEndpoint,
+                currentJudgeKey,
+                item.referenceSummary
               );
 
               // Store evaluation with all fields

@@ -2,7 +2,7 @@
 import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { BatchItem, AppConfig, ValidationStatus } from '../types';
-import { evaluateSummary, EvaluationResult } from '../services/geminiService';
+import { evaluateSummary, EvaluationResult } from '../services/llmService';
 import ReactMarkdown from 'react-markdown';
 import { Star, Download, ChevronDown, ChevronRight, MessageSquare, FileJson, Check, Search, X, Target, ArrowUpDown, Settings, FileSpreadsheet, BookOpen, ThumbsUp, ThumbsDown, Filter } from 'lucide-react';
 
@@ -304,7 +304,7 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `gemini_ft_dataset_${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`;
+            a.download = `finetune_dataset_${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`;
             document.body.appendChild(a);
             a.click();
 
