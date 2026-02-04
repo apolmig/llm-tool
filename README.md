@@ -33,3 +33,17 @@ The application supports **Local LLMs** (via LM Studio) and **Cloud APIs** (Open
 2. Select "Local LLM" in the app sidebar.
 3. Ensure the endpoint matches (default: `http://localhost:1234/v1/chat/completions`).
 
+## Features
+
+### 🌍 Localization (i18n)
+The application fully supports **English** and **Spanish**.
+- The language is automatically detected based on system settings or can be configured in the code.
+- All UI elements, including headers, buttons, and status messages, are localized.
+
+### ⚖️ LLM as a Judge
+Built-in evaluation framework to grade summaries:
+- **Configurable Criteria**: Define custom criteria (Accuracy, Conciseness, etc.) with weights.
+- **Batch Evaluation**: Run evaluation on multiple items automatically.
+- **Support**: Works with both Cloud/OpenAI-compatible and Local LLMs.
+
+

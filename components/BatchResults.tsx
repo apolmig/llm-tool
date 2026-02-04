@@ -1,6 +1,7 @@
 
 import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
+import { useTranslation } from 'react-i18next';
 import { BatchItem, AppConfig, ValidationStatus } from '../types';
 import { evaluateSummary, EvaluationResult } from '../services/llmService';
 import ReactMarkdown from 'react-markdown';
@@ -16,6 +17,8 @@ interface BatchResultsProps {
 
 
 const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config, onUpdateEvaluation, onUpdateItem }) => {
+    const { t } = useTranslation();
+
     const [expandedRow, setExpandedRow] = useState<string | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [sortCriteria, setSortCriteria] = useState<'default' | 'consistency'>('default');
@@ -191,6 +194,9 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
             const judgeProvider = config.useMainModelAsJudge ? runConfig.provider : config.judgeProvider;
             const judgeModel = config.useMainModelAsJudge ? runConfig.model : config.judgeModel;
 
+            // Determine API Key for Judge
+            const judgeApiKey = judgeProvider === 'cloud' ? config.cloudApiKey : '';
+
             // Pass reference summary if available
             const evaluation = await evaluateSummary(
                 item.sourceText,
@@ -198,8 +204,9 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
                 config.judgeCriteria,
                 judgeProvider,
                 judgeModel,
-                config.localEndpoint,
-                item.referenceSummary // Pass reference for comparison if available
+                judgeProvider === 'cloud' ? config.cloudEndpoint : config.localEndpoint,
+                judgeApiKey,
+                item.referenceSummary
             );
 
             // Update evaluation with all new fields
@@ -671,20 +678,22 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
         );
     }
 
+
+
     return (
         <div className="flex flex-col h-full bg-slate-950">
             {/* Header */}
             <div className="p-4 border-b border-slate-800 bg-slate-950">
                 <div className="flex flex-wrap gap-3 items-center">
                     <div className="flex-shrink-0">
-                        <h2 className="text-lg font-semibold text-slate-100">Evaluation Workbench</h2>
+                        <h2 className="text-lg font-semibold text-slate-100">{t('results.title')}</h2>
                         <p className="text-xs text-slate-500">
                             {filteredItems.length !== items.length ? (
-                                <span className="text-indigo-400 font-medium">{filteredItems.length} matching</span>
+                                <span className="text-indigo-400 font-medium">{filteredItems.length} {t('results.matching')}</span>
                             ) : (
-                                <span>{items.length} Test Cases</span>
+                                <span>{items.length} {t('results.testCases')}</span>
                             )}
-                            {' '}• {config.activeRunConfigs.length} Configs Active
+                            {' '}• {config.activeRunConfigs.length} {t('common.modelsActive')}
                         </p>
                     </div>
 
@@ -693,15 +702,15 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
                         <div className="relative group">
                             <button className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700 transition-colors">
                                 <Settings size={14} />
-                                <span className="hidden sm:inline">Columns</span>
+                                <span className="hidden sm:inline">{t('common.columns')}</span>
                             </button>
                             <div className="absolute right-0 top-full mt-2 w-48 bg-slate-900 border border-slate-800 rounded-lg shadow-xl p-2 hidden group-hover:block z-50">
-                                <div className="text-[10px] uppercase font-bold text-slate-500 mb-2 px-1">Toggle Visibility</div>
+                                <div className="text-[10px] uppercase font-bold text-slate-500 mb-2 px-1">{t('results.toggleVisibility')}</div>
                                 <button
                                     onClick={() => toggleColumn('reference')}
                                     className="w-full text-left px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800 rounded flex items-center justify-between"
                                 >
-                                    <span className="truncate">Reference / Ground Truth</span>
+                                    <span className="truncate">{t('results.reference')}</span>
                                     {visibleColumns.includes('reference') && <Check size={12} className="text-emerald-400" />}
                                 </button>
                                 {config.runConfigurations.filter(c => config.activeRunConfigs.includes(c.id)).map(c => (
@@ -720,7 +729,7 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
                             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-400 transition-colors" size={14} />
                             <input
                                 type="text"
-                                placeholder="Search tasks..."
+                                placeholder={t('common.search')}
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
                                 className="w-full sm:w-48 focus:w-full sm:focus:w-64 bg-slate-900 border border-slate-800 text-slate-200 text-xs rounded-lg pl-8 pr-8 py-2 focus:ring-1 focus:ring-indigo-500 outline-none transition-all placeholder-slate-600"
@@ -744,7 +753,7 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
                             title="Sort columns by adherence to word count target"
                         >
                             <ArrowUpDown size={14} />
-                            <span className="hidden sm:inline">{sortCriteria === 'consistency' ? 'Best Adherence' : 'Default Order'}</span>
+                            <span className="hidden sm:inline">{sortCriteria === 'consistency' ? t('results.bestAdherence') : t('results.defaultOrder')}</span>
                         </button>
 
                         {/* Model Comparison Toggle */}
@@ -757,7 +766,7 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
                             title="Show model comparison dashboard"
                         >
                             <Star size={14} />
-                            <span className="hidden sm:inline">Compare</span>
+                            <span className="hidden sm:inline">{t('common.compare')}</span>
                         </button>
 
                         {/* Filter Dropdown */}
@@ -768,11 +777,11 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
                                 }`}>
                                 <Filter size={14} />
                                 <span className="hidden sm:inline">{
-                                    filterMode === 'all' ? 'All' :
-                                        filterMode === 'pending' ? 'Pending' :
-                                            filterMode === 'approved' ? 'Approved' :
-                                                filterMode === 'rejected' ? 'Rejected' :
-                                                    'Low Score'
+                                    filterMode === 'all' ? t('results.all') :
+                                        filterMode === 'pending' ? t('results.pending') :
+                                            filterMode === 'approved' ? t('results.approved') :
+                                                filterMode === 'rejected' ? t('results.rejected') :
+                                                    t('results.lowScore')
                                 }</span>
                             </button>
                             <div className="absolute right-0 top-full mt-2 w-36 bg-slate-900 border border-slate-700 rounded-lg shadow-xl hidden group-hover:block z-50">
@@ -819,7 +828,7 @@ const BatchResults: React.FC<BatchResultsProps> = ({ items, activeModels, config
                                 ) : (
                                     <>
                                         <Target size={14} />
-                                        <span className="hidden sm:inline">Judge All</span>
+                                        <span className="hidden sm:inline">{t('results.judgeBatch')}</span>
                                     </>
                                 )}
                             </button>

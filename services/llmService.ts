@@ -1,11 +1,18 @@
 
 import { AppConfig, FormatType, JudgeCriteria, ModelProvider } from "../types";
+import { retryWithBackoff } from "../src/utils/requestQueue";
 
 
 // Initial Gemini client - REMOVED or kept as legacy if needed? 
 // The user requested "generic openai compatible api", so we will focus on that.
 // We will use standard fetch for everything to be "generic".
 
+/**
+ * Build a prompt for summarization based on user configuration
+ * @param text Source text to summarize
+ * @param config Application configuration
+ * @returns Formatted prompt string
+ */
 export const buildPrompt = (text: string, config: AppConfig): string => {
     let userPrompt = `Please summarize the following text.\n\nOriginal Text:\n"${text}"\n\nRequirements:`;
     userPrompt += `\n- Tone: ${config.tone}`;
@@ -24,16 +31,62 @@ export const buildPrompt = (text: string, config: AppConfig): string => {
     return userPrompt;
 };
 
+/**
+ * Validate inputs before making API request
+ */
+function validateSummaryInputs(text: string, config: AppConfig): { valid: boolean; error?: string } {
+    if (!text?.trim()) {
+        return { valid: false, error: 'Input text is required and cannot be empty' };
+    }
+
+    if (text.length > 1000000) {
+        return { valid: false, error: 'Input text is too long (max 1M characters)' };
+    }
+
+    if (config.provider === 'cloud') {
+        if (!config.cloudEndpoint?.trim()) {
+            return { valid: false, error: 'Cloud endpoint is required for cloud provider' };
+        }
+        if (!config.cloudApiKey?.trim()) {
+            return { valid: false, error: 'API key is required for cloud provider' };
+        }
+    }
+
+    if (config.provider === 'local' && !config.localEndpoint?.trim()) {
+        return { valid: false, error: 'Local endpoint is required for local provider' };
+    }
+
+    return { valid: true };
+}
+
+/**
+ * Generate a summary using the configured LLM
+ * @param text Source text to summarize
+ * @param config Application configuration
+ * @param modelOverride Optional model to use instead of config default
+ * @returns Generated summary text
+ * @throws Error if validation fails or API request fails
+ */
 export const generateSummary = async (
     text: string,
     config: AppConfig,
     modelOverride?: string
 ): Promise<string> => {
+    // Validate inputs
+    const validation = validateSummaryInputs(text, config);
+    if (!validation.valid) {
+        throw new Error(validation.error);
+    }
+
     const prompt = buildPrompt(text, config);
 
     // Use the override if provided, otherwise fallback to the first active model
     const baseModelToUse = modelOverride || config.activeModels[0];
     const modelToUse = baseModelToUse; // Simplified, version logic can be handled by user inputing full model name
+
+    if (!modelToUse) {
+        throw new Error('No model selected. Please select at least one model.');
+    }
 
     if (config.provider === 'local') {
         return generateGenericOpenAIRequest(
@@ -44,9 +97,6 @@ export const generateSummary = async (
             '' // No API key for local usually
         );
     } else if (config.provider === 'cloud') {
-        if (!config.cloudEndpoint || !config.cloudApiKey) {
-            throw new Error("Cloud provider requires an Endpoint and API Key.");
-        }
         return generateGenericOpenAIRequest(
             prompt,
             config,
@@ -61,11 +111,85 @@ export const generateSummary = async (
             config,
             modelToUse,
             config.cloudEndpoint || 'https://generativelanguage.googleapis.com/v1beta/openai/', // Fallback/Test
-            config.cloudApiKey || process.env.GEMINI_API_KEY || ''
+            config.cloudApiKey || import.meta.env.VITE_GEMINI_API_KEY || ''
         );
     }
 };
 
+/**
+ * Normalize endpoint URL to ensure it ends with /chat/completions
+ */
+function normalizeEndpointUrl(endpoint: string): string {
+    const urlStr = endpoint.trim();
+
+    try {
+        // Parse URL to handle query parameters correctly
+        const urlObj = new URL(urlStr);
+        const pathname = urlObj.pathname;
+
+        // If path ends with specific endpoints, return original full URL
+        if (pathname.endsWith('/chat/completions') || pathname.endsWith('/generateContent')) {
+            return urlStr;
+        }
+
+        // If ends with /v1, append /chat/completions
+        if (pathname.endsWith('/v1')) {
+            urlObj.pathname = pathname + '/chat/completions';
+            return urlObj.toString();
+        }
+
+        // If ends with /models, replace with /chat/completions
+        if (pathname.endsWith('/models')) {
+            urlObj.pathname = pathname.replace(/\/models$/, '/chat/completions');
+            return urlObj.toString();
+        }
+
+        // Default: append /chat/completions
+        // Ensure we don't double slash
+        urlObj.pathname = pathname.replace(/\/+$/, '') + '/chat/completions';
+        return urlObj.toString();
+
+    } catch (e) {
+        // Fallback for invalid URLs or relative paths (though unlikely for API endpoints)
+        let base = urlStr;
+        const queryIndex = urlStr.indexOf('?');
+        let query = '';
+
+        if (queryIndex !== -1) {
+            base = urlStr.substring(0, queryIndex);
+            query = urlStr.substring(queryIndex);
+        }
+
+        if (base.endsWith('/')) {
+            base = base.slice(0, -1);
+        }
+
+        if (base.endsWith('/chat/completions') || base.endsWith('/generateContent')) {
+            return urlStr;
+        }
+
+        if (base.endsWith('/v1')) {
+            return `${base}/chat/completions${query}`;
+        }
+
+        if (base.endsWith('/models')) {
+            return base.replace('/models', '/chat/completions') + query;
+        }
+
+        return `${base}/chat/completions${query}`;
+    }
+}
+
+
+/**
+ * Make a generic OpenAI-compatible API request with retry logic
+ * @param prompt User prompt
+ * @param config Application configuration
+ * @param model Model identifier
+ * @param endpoint API endpoint URL
+ * @param apiKey API key (optional for local)
+ * @returns Generated text response
+ */
 const generateGenericOpenAIRequest = async (
     prompt: string,
     config: AppConfig,
@@ -73,54 +197,91 @@ const generateGenericOpenAIRequest = async (
     endpoint: string,
     apiKey: string
 ): Promise<string> => {
-    try {
-        // Clean endpoint: remove trailing slash
-        let url = endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
+    // Wrap the actual request in retry logic
+    return retryWithBackoff(async () => {
+        try {
+            const url = normalizeEndpointUrl(endpoint);
 
-        // Ensure it ends with /chat/completions if not already (and not just base url)
-        // Common pattern: User enters "https://openrouter.ai/api/v1" -> we append "/chat/completions"
-        // If they enter full path, we respect it.
-        if (!url.endsWith('/chat/completions') && !url.endsWith('/generateContent')) {
-            url = `${url}/chat/completions`;
+            const headers: Record<string, string> = {
+                'Content-Type': 'application/json',
+            };
+
+            if (apiKey) {
+                // Azure OpenAI requires 'api-key' header
+                if (url.includes('openai.azure.com') || url.includes('api-version=')) {
+                    headers['api-key'] = apiKey;
+                } else {
+                    headers['Authorization'] = `Bearer ${apiKey}`;
+                }
+            }
+
+            const body: any = {
+                model: model,
+                messages: [
+                    { role: 'system', content: config.systemInstruction },
+                    { role: 'user', content: prompt }
+                ],
+                temperature: config.temperature,
+                top_p: config.topP,
+                stream: false
+            };
+
+            // Newer models (o1, gpt-5) and some Azure versions require max_completion_tokens
+            if (model.includes('o1-') || model.includes('gpt-5') || url.includes('api-version=2025-')) {
+                body.max_completion_tokens = config.maxOutputTokens;
+                // Reasoning models enforce temperature=1 and often do not support top_p
+                body.temperature = 1;
+                delete body.top_p;
+            } else {
+                body.max_tokens = config.maxOutputTokens;
+            }
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(body),
+            });
+
+            if (!response.ok) {
+                const errText = await response.text();
+
+                // Provide more specific error messages
+                if (response.status === 401) {
+                    throw new Error(`Authentication failed: Invalid API key`);
+                } else if (response.status === 429) {
+                    throw new Error(`Rate limit exceeded. Please try again later.`);
+                } else if (response.status === 404) {
+                    throw new Error(`Model "${model}" not found or endpoint incorrect`);
+                } else if (response.status >= 500) {
+                    throw new Error(`Server error (${response.status}). The API may be temporarily unavailable.`);
+                } else {
+                    throw new Error(`API Error (${response.status}): ${errText}`);
+                }
+            }
+
+            const data = await response.json();
+            const content = data.choices?.[0]?.message?.content;
+
+            if (!content) {
+                // Return detailed error to help debug response structure or safety filters
+                const debugInfo = JSON.stringify(data, null, 2);
+                console.error("API Response Data:", data);
+                if (data.choices?.[0]?.finish_reason === 'content_filter') {
+                    throw new Error('Azure OpenAI Content Filter triggered. Please modify your prompt.');
+                }
+                throw new Error(`No content in API response. Response: ${debugInfo}`);
+            }
+
+            return content;
+
+        } catch (error) {
+            // Re-throw with more context if it's a network error
+            if (error instanceof TypeError && error.message.includes('fetch')) {
+                throw new Error(`Network error: Unable to connect to ${endpoint}. Please check your connection and endpoint URL.`);
+            }
+            throw error;
         }
-
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-        };
-        if (apiKey) {
-            headers['Authorization'] = `Bearer ${apiKey}`;
-        }
-
-        const body = {
-            model: model,
-            messages: [
-                { role: 'system', content: config.systemInstruction },
-                { role: 'user', content: prompt }
-            ],
-            temperature: config.temperature,
-            max_tokens: config.maxOutputTokens,
-            top_p: config.topP,
-            stream: false
-        };
-
-        const response = await fetch(url, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(body),
-        });
-
-        if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`API Error (${response.status}): ${errText}`);
-        }
-
-        const data = await response.json();
-        return data.choices?.[0]?.message?.content || "No summary generated.";
-
-    } catch (error) {
-        console.error(`LLM API Error (${model}):`, error);
-        throw new Error(`Failed to generate summary with ${model}. Check console for details.`);
-    }
+    }, 3, 1000); // 3 retries with 1s base delay
 };
 
 
@@ -131,6 +292,18 @@ export interface EvaluationResult {
     comparedToReference?: boolean;
 }
 
+/**
+ * Evaluate a generated summary using an LLM as a judge
+ * @param originalText Source text
+ * @param generatedSummary Summary to evaluate
+ * @param criteria Evaluation criteria with weights
+ * @param provider Provider type (cloud/local)
+ * @param model Model identifier
+ * @param endpoint API endpoint
+ * @param apiKey API key (optional for local)
+ * @param referenceSummary Optional reference summary for comparison
+ * @returns Evaluation result with score and notes
+ */
 export const evaluateSummary = async (
     originalText: string,
     generatedSummary: string,
@@ -138,11 +311,36 @@ export const evaluateSummary = async (
     provider: ModelProvider,
     model: string,
     endpoint: string,
-    apiKey: string, // Changed from localEndpoint only
+    apiKey: string,
     referenceSummary?: string
 ): Promise<EvaluationResult> => {
 
-    const hasReference = referenceSummary && referenceSummary.trim().length > 0;
+    // Validate inputs
+    if (!originalText?.trim() || !generatedSummary?.trim()) {
+        return {
+            score: 0,
+            note: 'Evaluation failed: Missing original text or generated summary',
+            comparedToReference: false
+        };
+    }
+
+    if (!model?.trim() || !endpoint?.trim()) {
+        return {
+            score: 0,
+            note: 'Evaluation failed: Judge model or endpoint not configured',
+            comparedToReference: false
+        };
+    }
+
+    if (!criteria || criteria.length === 0) {
+        return {
+            score: 0,
+            note: 'Evaluation failed: No criteria defined',
+            comparedToReference: false
+        };
+    }
+
+    const hasReference = !!(referenceSummary && referenceSummary.trim().length > 0);
 
     let prompt = `You are an expert AI evaluator. Your task is to grade the quality of a generated summary.
 
@@ -205,7 +403,8 @@ ${criteria.map(c => `    "${c.name}": <number_0_to_10>`).join(',\n')}
             maxOutputTokens: 1000,
             topP: 0.95
         };
-        // Use the generic request for judging too
+
+        // Use the generic request for judging too (with retry logic)
         responseText = await generateGenericOpenAIRequest(prompt, config, model, endpoint, apiKey);
 
         // Parse JSON
@@ -231,7 +430,11 @@ ${criteria.map(c => `    "${c.name}": <number_0_to_10>`).join(',\n')}
             return evaluationResult;
         } catch (e) {
             console.error("Failed to parse evaluation JSON:", responseText);
-            return { score: 0, note: "Error parsing evaluator response.", comparedToReference: hasReference };
+            return {
+                score: 0,
+                note: `Error parsing evaluator response: ${e instanceof Error ? e.message : 'Invalid JSON'}`,
+                comparedToReference: hasReference
+            };
         }
 
     } catch (error) {

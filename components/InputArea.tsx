@@ -1,7 +1,8 @@
-
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, FileText, X, ClipboardPaste, Database, Play, Layers, Check } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Upload, FileText, X, ClipboardPaste, Database, Play, Layers, Check, Loader2 } from 'lucide-react';
 import { BatchItem, ViewMode } from '../types';
+import Skeleton from '../src/components/Skeleton';
 import * as XLSX from 'xlsx';
 import mammoth from 'mammoth';
 import * as pdfjsLib from 'pdfjs-dist';
@@ -18,6 +19,7 @@ interface InputAreaProps {
     batchItems: BatchItem[];
     setBatchItems: React.Dispatch<React.SetStateAction<BatchItem[]>>;
     batchProgress?: { current: number; total: number };
+    onStop?: () => void;
 }
 
 const InputArea: React.FC<InputAreaProps> = ({
@@ -28,8 +30,10 @@ const InputArea: React.FC<InputAreaProps> = ({
     viewMode,
     batchItems,
     setBatchItems,
-    batchProgress
+    batchProgress,
+    onStop
 }) => {
+    const { t } = useTranslation();
     const [dragActive, setDragActive] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -568,7 +572,7 @@ const InputArea: React.FC<InputAreaProps> = ({
                     <div className="flex justify-between items-center">
                         <h2 className="text-xl font-semibold text-slate-100 flex items-center gap-2">
                             <Database className="text-indigo-400" />
-                            Batch Datasets
+                            {t('input.batchDatasets')}
                         </h2>
                         {batchItems.length > 0 && (
                             <div className="flex gap-2">
@@ -578,14 +582,14 @@ const InputArea: React.FC<InputAreaProps> = ({
                                         className="px-3 py-1.5 text-amber-400 hover:text-amber-300 border border-amber-500/30 hover:bg-amber-500/10 transition-colors text-xs font-medium rounded-md"
                                         title="Reset all items to pending status to re-run"
                                     >
-                                        Reset & Re-run
+                                        {t('input.resetRerun')}
                                     </button>
                                 )}
                                 <button
                                     onClick={clearBatch}
                                     className="px-3 py-1.5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 border border-slate-700 hover:border-red-500/30 transition-colors text-xs font-medium rounded-md"
                                 >
-                                    Clear All ({batchItems.length})
+                                    {t('input.clearAll')} ({batchItems.length})
                                 </button>
                             </div>
                         )}
@@ -594,33 +598,42 @@ const InputArea: React.FC<InputAreaProps> = ({
 
                 {/* Scrollable Content Area */}
                 <div className="flex-1 overflow-y-auto p-6 pt-4 min-h-0">
-                    <div className="relative flex flex-col bg-slate-900/50 border-2 border-dashed border-slate-700 rounded-xl p-6 items-center justify-center transition-colors hover:border-indigo-500/50 hover:bg-slate-900/80 min-h-[400px]"
-                        onDragEnter={handleDrag}
-                        onDragLeave={handleDrag}
+                    <div
+                        className="border-2 border-dashed border-slate-700 rounded-xl p-8 text-center transition-colors hover:border-indigo-500/50 hover:bg-slate-800/30 group cursor-pointer"
                         onDragOver={handleDrag}
+                        onDragLeave={handleDrag}
                         onDrop={handleDrop}
+                        onClick={() => fileInputRef.current?.click()}
+                        role="button"
+                        aria-label="Upload files area. Click or drag files here."
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                                fileInputRef.current?.click();
+                            }
+                        }}
                     >
                         {batchItems.length === 0 ? (
                             <div className="text-center space-y-3">
                                 <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mx-auto text-indigo-400">
                                     <Layers size={32} />
                                 </div>
-                                <h3 className="text-lg font-medium text-slate-200">Drag & Drop Dataset(s)</h3>
+                                <h3 className="text-lg font-medium text-slate-200">{t('input.dragDropDatasets')}</h3>
                                 <p className="text-sm text-slate-500 max-w-xs mx-auto">
-                                    Upload .csv, .xlsx, .docx, .pdf, .json, .md, or .txt files containing multiple text entries to process them in bulk.
+                                    {t('input.uploadHint')}
                                 </p>
                                 <button
                                     onClick={() => fileInputRef.current?.click()}
                                     className="mt-4 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
                                 >
-                                    Browse Files
+                                    {t('input.browseFiles')}
                                 </button>
                             </div>
                         ) : (
                             <div className="w-full h-full flex flex-col">
                                 <div className="flex justify-between items-center mb-2 text-sm text-slate-400">
                                     <span>Preview ({batchItems.length} items)</span>
-                                    <button onClick={() => fileInputRef.current?.click()} className="text-indigo-400 hover:underline">Add More</button>
+                                    <button onClick={() => fileInputRef.current?.click()} className="text-indigo-400 hover:underline">{t('input.addMore')}</button>
                                 </div>
                                 <div className="flex-1 overflow-y-auto border border-slate-800 rounded-lg bg-slate-950 p-2 space-y-1 custom-scrollbar">
                                     {batchItems.map((item, idx) => (
@@ -653,11 +666,13 @@ const InputArea: React.FC<InputAreaProps> = ({
                 {/* Sticky Bottom Button Bar */}
                 <div className="flex-shrink-0 p-6 pt-4 border-t border-slate-800 bg-slate-950">
                     <button
-                        onClick={onGenerate}
-                        disabled={isGenerating || !hasPendingItems}
-                        className={`w-full py-3 rounded-xl font-semibold text-white transition-all duration-200 flex items-center justify-center gap-2 shadow-lg ${isGenerating || !hasPendingItems
-                            ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                            : 'bg-indigo-600 hover:bg-indigo-500 hover:scale-[1.01] active:scale-[0.99] shadow-indigo-500/20'
+                        onClick={isGenerating ? onStop : onGenerate}
+                        disabled={!isGenerating && !hasPendingItems}
+                        className={`w-full py-3 rounded-xl font-semibold text-white transition-all duration-200 flex items-center justify-center gap-2 shadow-lg ${isGenerating
+                            ? 'bg-red-500 hover:bg-red-600 hover:scale-[1.01] active:scale-[0.99] shadow-red-500/20'
+                            : !hasPendingItems
+                                ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                                : 'bg-indigo-600 hover:bg-indigo-500 hover:scale-[1.01] active:scale-[0.99] shadow-indigo-500/20'
                             }`}
                         title={!hasPendingItems && batchItems.length > 0 ? 'All items processed. Click "Reset & Re-run" to process again.' : ''}
                     >
@@ -665,18 +680,18 @@ const InputArea: React.FC<InputAreaProps> = ({
                             <>
                                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                                 {batchProgress && batchProgress.total > 0
-                                    ? `Processing ${batchProgress.current}/${batchProgress.total}...`
-                                    : 'Processing Batch...'}
+                                    ? t('input.stopBatch', { current: batchProgress.current, total: batchProgress.total })
+                                    : t('common.stop')}
                             </>
                         ) : !hasPendingItems && batchItems.length > 0 ? (
                             <>
                                 <Check size={18} />
-                                All Items Processed
+                                {t('common.done')}
                             </>
                         ) : (
                             <>
                                 <Play size={18} fill="currentColor" />
-                                Run Batch Process ({batchItems.filter(i => i.status === 'pending').length} pending)
+                                {t('input.playBatch', { pending: batchItems.filter(i => i.status === 'pending').length })}
                             </>
                         )}
                     </button>
@@ -693,12 +708,12 @@ const InputArea: React.FC<InputAreaProps> = ({
     return (
         <div className="flex flex-col h-full p-6 gap-4">
             <div className="flex justify-between items-center">
-                <h2 className="text-xl font-semibold text-slate-100">Source Content</h2>
+                <h2 className="text-xl font-semibold text-slate-100">{t('input.sourceContent')}</h2>
                 <div className="flex gap-2">
                     <button
                         onClick={() => setText('')}
                         className="p-2 text-slate-400 hover:text-red-400 transition-colors"
-                        title="Clear"
+                        title={t('common.clear')}
                     >
                         <X size={18} />
                     </button>
@@ -710,7 +725,7 @@ const InputArea: React.FC<InputAreaProps> = ({
                     value={text}
                     onChange={(e) => setText(e.target.value)}
                     className="flex-1 w-full bg-slate-900/50 border border-slate-700 rounded-xl p-4 text-slate-300 resize-none focus:ring-2 focus:ring-indigo-500/50 outline-none placeholder-slate-600 font-mono text-sm"
-                    placeholder="Paste text here, or drop a .txt/.csv/.md/.xlsx/.docx/.pdf file..."
+                    placeholder={t('common.inputPlaceholder')}
                     onDragEnter={handleDrag}
                 />
 
@@ -742,14 +757,14 @@ const InputArea: React.FC<InputAreaProps> = ({
                         className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg text-xs font-medium flex items-center gap-2 transition-colors border border-slate-700"
                     >
                         <ClipboardPaste size={14} />
-                        Paste Clipboard
+                        {t('input.pasteClipboard')}
                     </button>
                     <button
                         onClick={() => fileInputRef.current?.click()}
                         className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg text-xs font-medium flex items-center gap-2 transition-colors border border-slate-700"
                     >
                         <FileText size={14} />
-                        Load File
+                        {t('input.loadFile')}
                     </button>
                     <input
                         type="file"
@@ -772,10 +787,10 @@ const InputArea: React.FC<InputAreaProps> = ({
                 {isGenerating ? (
                     <>
                         <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        Processing...
+                        {t('common.processing')}
                     </>
                 ) : (
-                    'Generate Summary'
+                    t('common.generate')
                 )}
             </button>
         </div>

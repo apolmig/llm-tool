@@ -1,5 +1,9 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useResizable, useResizableSidebar } from './src/hooks/useResizable';
+import { useBatchProcessor } from './src/hooks/useBatchProcessor';
+import TitleBar from './components/TitleBar';
 import Sidebar from './components/Sidebar';
 import InputArea from './components/InputArea';
 import OutputArea from './components/OutputArea';
@@ -7,10 +11,12 @@ import BatchResults from './components/BatchResults';
 import { AppConfig, ModelType, ToneType, FormatType, HistoryItem, ViewMode, BatchItem } from './types';
 import { generateSummary, buildPrompt, evaluateSummary } from './services/llmService';
 import { PanelLeftOpen, PanelLeftClose } from 'lucide-react';
+import { useToast } from './src/hooks/useToast';
+import SkipLink from './src/components/SkipLink';
 
 const DEFAULT_CONFIG: AppConfig = {
   provider: 'cloud',
-  activeModels: [ModelType.FLASH],
+  activeModels: [], // Agnostic default: user must select or fetch models
   modelVersion: '',
   // Default Cloud Config (OpenRouter)
   cloudEndpoint: 'https://openrouter.ai/api/v1',
@@ -19,7 +25,7 @@ const DEFAULT_CONFIG: AppConfig = {
   temperature: 0.5,
   topK: 40,
   topP: 0.95,
-  maxOutputTokens: 1024,
+  maxOutputTokens: 4096, // Increased default for reasoning models (e.g. o1/gpt-5)
   systemInstruction: "You are a helpful, precise AI assistant specialized in summarizing content.",
   tone: ToneType.PROFESSIONAL,
   format: FormatType.PARAGRAPH,
@@ -41,6 +47,8 @@ const DEFAULT_CONFIG: AppConfig = {
 };
 
 const App: React.FC = () => {
+  const { t } = useTranslation();
+  const { addToast } = useToast();
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const [inputText, setInputText] = useState<string>("");
   const [results, setResults] = useState<Record<string, string>>({});
@@ -49,17 +57,32 @@ const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('playground');
 
   // Resizable Frame State
-  const [splitRatio, setSplitRatio] = useState(50); // Percentage for left panel
-  const containerRef = useRef<HTMLDivElement>(null);
-  const isResizing = useRef(false);
+  const {
+    ratio: splitRatio,
+    setRatio: setSplitRatio,
+    containerRef,
+    startResizing
+  } = useResizable({ initialRatio: 50, minRatio: 20, maxRatio: 80 });
 
   // Sidebar Resizing State
-  const [sidebarWidth, setSidebarWidth] = useState(320);
-  const isResizingSidebar = useRef(false);
+  const {
+    width: sidebarWidth,
+    startResizing: startResizingSidebar
+  } = useResizableSidebar(320, 200, 800);
 
   // Batch State
   const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
-  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  // batchProgress is now derived
+  const batchProgress = {
+    current: batchItems.filter(i => i.status === 'done').length + (batchItems.some(i => i.status === 'processing') ? 1 : 0),
+    total: batchItems.length
+  };
+
+  const {
+    isGenerating: isBatchGenerating,
+    processBatch,
+    stopBatch
+  } = useBatchProcessor({ config, batchItems, setBatchItems });
 
   // History State
   const [history, setHistory] = useState<HistoryItem[]>(() => {
@@ -84,64 +107,22 @@ const App: React.FC = () => {
     }
   }, [viewMode]);
 
-  // Resize Handlers
-  const startResizing = useCallback(() => {
-    isResizing.current = true;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', stopResizing);
-  }, []);
-
-  const stopResizing = useCallback(() => {
-    isResizing.current = false;
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-    window.removeEventListener('mousemove', handleMouseMove);
-    window.removeEventListener('mouseup', stopResizing);
-  }, []);
-
-  const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (!isResizing.current || !containerRef.current) return;
-
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const newRatio = ((e.clientX - containerRect.left) / containerRect.width) * 100;
-
-    // Clamp between 20% and 80%
-    setSplitRatio(Math.min(Math.max(newRatio, 20), 80));
-  }, []);
-
-  // Sidebar Resize Handlers
-  const startResizingSidebar = useCallback(() => {
-    isResizingSidebar.current = true;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    window.addEventListener('mousemove', handleSidebarMouseMove);
-    window.addEventListener('mouseup', stopResizingSidebar);
-  }, []);
-
-  const stopResizingSidebar = useCallback(() => {
-    isResizingSidebar.current = false;
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-    window.removeEventListener('mousemove', handleSidebarMouseMove);
-    window.removeEventListener('mouseup', stopResizingSidebar);
-  }, []);
-
-  const handleSidebarMouseMove = useCallback((e: MouseEvent) => {
-    if (!isResizingSidebar.current) return;
-    const newWidth = e.clientX;
-    // Clamp between 200px and 800px
-    setSidebarWidth(Math.min(Math.max(newWidth, 200), 800));
-  }, []);
-
   const handleGenerate = useCallback(async () => {
     if (viewMode === 'batch') {
-      handleBatchGenerate();
+      processBatch();
       return;
     }
 
-    if (!inputText || config.activeModels.length === 0) return;
+    if (!inputText) {
+      addToast('error', t('app.errorNoInput', 'Please enter some text to summarize.'));
+      return;
+    }
+
+    if (config.activeModels.length === 0) {
+      addToast('error', t('app.errorNoModel', 'Please select at least one model from the sidebar.'));
+      return;
+    }
+
 
     setIsGenerating(true);
     setResults({});
@@ -168,6 +149,8 @@ const App: React.FC = () => {
       });
 
       setResults(newResults);
+      addToast('success', t('app.generationComplete', 'Generation complete!'));
+
 
       // Add to history
       const newItem: HistoryItem = {
@@ -183,126 +166,15 @@ const App: React.FC = () => {
 
     } catch (error: any) {
       console.error("Critical generation error", error);
-      setResults({ "System": "Critical Error during generation." });
+      setResults({ "System": t('app.criticalError') });
+      addToast('error', t('app.generationError', 'Generation failed'));
+
     } finally {
       setIsGenerating(false);
     }
   }, [inputText, config, viewMode, batchItems]);
 
-  const handleBatchGenerate = async () => {
-    if (batchItems.length === 0) return;
-    setIsGenerating(true);
 
-    // Process items that are not 'done'
-    const pendingItems = batchItems.filter(i => i.status !== 'done');
-
-    for (const item of pendingItems) {
-      // Update status to processing
-      setBatchItems(prev => prev.map(pi => pi.id === item.id ? { ...pi, status: 'processing' } : pi));
-
-      const itemResults: Record<string, string> = {};
-      const itemEvaluations: Record<string, any> = {};
-
-      // Run all active configurations for this item
-      await Promise.all(config.activeRunConfigs.map(async (configId) => {
-        const runConfig = config.runConfigurations.find(c => c.id === configId);
-        if (!runConfig) return;
-
-        // Create a temporary AppConfig based on the RunConfiguration
-        const tempConfig: AppConfig = {
-          ...config,
-          provider: runConfig.provider, // Use the provider from the run config
-          activeModels: [runConfig.model],
-          systemInstruction: runConfig.systemInstruction,
-          temperature: runConfig.temperature,
-          topK: runConfig.topK,
-          topP: runConfig.topP,
-          maxOutputTokens: runConfig.maxOutputTokens,
-          tone: runConfig.tone,
-          format: runConfig.format,
-          customFocus: runConfig.customFocus,
-          maxWords: runConfig.maxWords
-        };
-
-        try {
-          const result = await generateSummary(item.sourceText, tempConfig, runConfig.model);
-          itemResults[configId] = result;
-
-          // --- LLM Judge Evaluation ---
-          try {
-            // Determine Judge Configuration
-            const judgeProvider = config.useMainModelAsJudge ? runConfig.provider : config.judgeProvider;
-            const judgeModel = config.useMainModelAsJudge ? runConfig.model : config.judgeModel;
-
-            // Skip evaluation if no judge model is selected/available
-            if (judgeModel) {
-              // Determine correct endpoint and key for Judge
-              let currentJudgeEndpoint = config.localEndpoint;
-              let currentJudgeKey = '';
-
-              if (judgeProvider === 'cloud') {
-                // Use configured cloud Endpoint/Key
-                if (config.useMainModelAsJudge) {
-                  // Main model is cloud -> use main cloud config
-                  currentJudgeEndpoint = config.cloudEndpoint;
-                  currentJudgeKey = config.cloudApiKey;
-                } else {
-                  // Dedicated judge is cloud
-                  currentJudgeEndpoint = config.judgeEndpoint || config.cloudEndpoint;
-                  currentJudgeKey = config.cloudApiKey;
-                }
-              } else {
-                // Local
-                if (config.useMainModelAsJudge) {
-                  currentJudgeEndpoint = config.localEndpoint;
-                } else {
-                  currentJudgeEndpoint = config.judgeEndpoint || config.localEndpoint;
-                }
-              }
-
-              const evaluation = await evaluateSummary(
-                item.sourceText,
-                result,
-                config.judgeCriteria,
-                judgeProvider,
-                judgeModel,
-                currentJudgeEndpoint,
-                currentJudgeKey,
-                item.referenceSummary
-              );
-
-              // Store evaluation with all fields
-              itemEvaluations[configId] = {
-                score: evaluation.score,
-                note: evaluation.note,
-                isGroundTruth: false,
-                criteriaScores: evaluation.criteriaScores,
-                comparedToReference: evaluation.comparedToReference
-              };
-            }
-          } catch (evalErr) {
-            console.error("Evaluation error:", evalErr);
-            itemEvaluations[configId] = { score: 0, note: "Evaluation failed", isGroundTruth: false };
-          }
-
-        } catch (e: any) {
-          console.error(`Batch generation error for ${runConfig.name} (${runConfig.model}):`, e);
-          itemResults[configId] = `Error: ${e.message}`;
-          itemEvaluations[configId] = { score: 0, note: "Generation failed", isGroundTruth: false };
-        }
-      }));
-
-      // Update item with results and evaluations
-      setBatchItems(prev => prev.map(pi => pi.id === item.id ? {
-        ...pi,
-        status: 'done',
-        results: itemResults,
-        evaluations: itemEvaluations
-      } : pi));
-    }
-
-    setIsGenerating(false);
-  };
 
   const handleUpdateEvaluation = (itemId: string, model: string, field: string, value: any) => {
     setBatchItems(prev => prev.map(item => {
@@ -339,122 +211,136 @@ const App: React.FC = () => {
   };
 
   const handleClearHistory = () => {
-    if (confirm('Are you sure you want to clear all history?')) {
+    if (confirm(t('app.clearHistoryConfirm'))) {
       setHistory([]);
     }
   };
 
   return (
-    <div className="flex h-screen bg-slate-950 overflow-hidden">
-      {/* Sidebar */}
-      <div
-        style={{ width: isSidebarOpen ? `${sidebarWidth}px` : '0px' }}
-        className={`transition-[width] duration-300 ease-in-out border-r border-slate-800 flex-shrink-0 relative group/sidebar`}
-      >
-        <div className="h-full overflow-hidden" style={{ width: `${sidebarWidth}px` }}>
-          <Sidebar
-            config={config}
-            setConfig={setConfig}
-            history={history}
-            onRestoreHistory={handleRestoreHistory}
-            onClearHistory={handleClearHistory}
-            viewMode={viewMode}
-            setViewMode={setViewMode}
-            buildPrompt={buildPrompt}
-            inputText={inputText}
-          />
-        </div>
-
-        {/* Sidebar Resizer Handle */}
+    <div className="flex flex-col h-screen bg-slate-950 overflow-hidden">
+      <SkipLink />
+      <TitleBar />
+      <div className="flex flex-1 overflow-hidden relative">
+        {/* Sidebar */}
         <div
-          className="absolute right-0 top-0 w-1.5 h-full cursor-col-resize hover:bg-indigo-500 transition-colors z-50 translate-x-1/2 bg-transparent hover:delay-75 active:bg-indigo-600"
-          onMouseDown={startResizingSidebar}
+          role="navigation"
+          aria-label="Main sidebar"
+          style={{ width: isSidebarOpen ? `${sidebarWidth}px` : '0px' }}
+          className={`transition-[width] duration-300 ease-in-out border-r border-slate-800 flex-shrink-0 relative group/sidebar`}
         >
-          {/* Visual Indicator on Hover */}
-          <div className="absolute inset-y-0 left-1/2 w-[1px] bg-slate-700 group-hover/sidebar:bg-indigo-500/50 transition-colors" />
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col h-full relative min-w-0">
-        {/* Mobile/Toggle Header */}
-        <div className="h-14 border-b border-slate-800 flex items-center px-4 justify-between bg-slate-950 z-20 flex-shrink-0">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setSidebarOpen(!isSidebarOpen)}
-              className="text-slate-400 hover:text-white transition-colors"
-            >
-              {isSidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeftOpen size={20} />}
-            </button>
-            <h1 className="text-lg font-bold text-slate-100 tracking-tight flex items-center gap-2">
-              Ciudadan<span className={`text-${config.provider === 'local' ? 'emerald' : 'indigo'}-500`}>IA</span>
-              {config.provider === 'local' && <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 rounded border border-emerald-500/30">LOCAL</span>}
-            </h1>
-          </div>
-          <div className="text-xs text-slate-500 font-mono hidden sm:block">
-            {config.activeModels.length > 1 ? `${config.activeModels.length} Models Active` : config.activeModels[0]}
-            {config.modelVersion && <span className="ml-2 opacity-50">({config.modelVersion})</span>}
-          </div>
-        </div>
-
-        {/* Content Grid with Resizer */}
-        <div ref={containerRef} className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
-
-          {/* Input Section */}
-          {/* Desktop: Uses splitRatio width */}
-          <div
-            style={{ width: `${splitRatio}%` }}
-            className={`
-                    border-b md:border-b-0 md:border-r border-slate-800 min-h-0 transition-[width] duration-0
-                    h-1/2 md:h-full w-full md:w-auto
-                `}
-          >
-            <InputArea
-              text={inputText}
-              setText={setInputText}
-              onGenerate={handleGenerate}
-              isGenerating={isGenerating}
+          <div className="h-full overflow-hidden" style={{ width: `${sidebarWidth}px` }}>
+            <Sidebar
+              config={config}
+              setConfig={setConfig}
+              history={history}
+              onRestoreHistory={handleRestoreHistory}
+              onClearHistory={handleClearHistory}
               viewMode={viewMode}
-              batchItems={batchItems}
-              setBatchItems={setBatchItems}
-              batchProgress={batchProgress}
+              setViewMode={setViewMode}
+              buildPrompt={buildPrompt}
+              inputText={inputText}
             />
           </div>
 
-          {/* Desktop Resizer Handle */}
+          {/* Sidebar Resizer Handle */}
           <div
-            className="hidden md:flex w-3 -ml-1.5 bg-transparent hover:bg-indigo-500/10 cursor-col-resize items-center justify-center z-30 absolute h-full"
-            style={{ left: `${splitRatio}%` }}
-            onMouseDown={startResizing}
+            role="separator"
+            aria-label="Resize sidebar"
+            className="absolute right-0 top-0 w-1.5 h-full cursor-col-resize hover:bg-indigo-500 transition-colors z-50 translate-x-1/2 bg-transparent hover:delay-75 active:bg-indigo-600"
+            onMouseDown={startResizingSidebar}
           >
-            <div className="h-8 w-1 bg-slate-700 rounded-full hover:bg-indigo-400 transition-colors" />
+            {/* Visual Indicator on Hover */}
+            <div className="absolute inset-y-0 left-1/2 w-[1px] bg-slate-700 group-hover/sidebar:bg-indigo-500/50 transition-colors" />
+          </div>
+        </div>
+
+        {/* Main Content */}
+        <main
+          id="main-content"
+          role="main"
+          className="flex-1 flex flex-col h-full relative min-w-0"
+        >
+          {/* Mobile/Toggle Header */}
+          <div className="h-14 border-b border-slate-800 flex items-center px-4 justify-between bg-slate-950 z-20 flex-shrink-0">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setSidebarOpen(!isSidebarOpen)}
+                className="text-slate-400 hover:text-white transition-colors"
+                aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
+                aria-expanded={isSidebarOpen}
+              >
+                {isSidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeftOpen size={20} />}
+              </button>
+              <h1 className="text-lg font-bold text-slate-100 tracking-tight flex items-center gap-2">
+                Ciudadan<span className={`text-${config.provider === 'local' ? 'emerald' : 'indigo'}-500`}>IA</span>
+                {config.provider === 'local' && <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 rounded border border-emerald-500/30">{t('common.local')}</span>}
+              </h1>
+            </div>
+            <div className="text-xs text-slate-500 font-mono hidden sm:block">
+              {config.activeModels.length > 1 ? `${config.activeModels.length} ${t('app.modelsActive')}` : config.activeModels[0]}
+              {config.modelVersion && <span className="ml-2 opacity-50">({config.modelVersion})</span>}
+            </div>
           </div>
 
-          {/* Output Section */}
-          <div
-            style={{ width: `${100 - splitRatio}%` }}
-            className={`
+          {/* Content Grid with Resizer */}
+          <div ref={containerRef} className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+
+            {/* Input Section */}
+            {/* Desktop: Uses splitRatio width */}
+            <div
+              style={{ width: `${splitRatio}%` }}
+              className={`
+                    border-b md:border-b-0 md:border-r border-slate-800 min-h-0 transition-[width] duration-0
+                    h-1/2 md:h-full w-full md:w-auto
+                `}
+            >
+              <InputArea
+                text={inputText}
+                setText={setInputText}
+                onGenerate={handleGenerate}
+                isGenerating={viewMode === 'batch' ? isBatchGenerating : isGenerating}
+                viewMode={viewMode}
+                batchItems={batchItems}
+                setBatchItems={setBatchItems}
+                batchProgress={batchProgress}
+                onStop={viewMode === 'batch' ? stopBatch : undefined}
+              />
+            </div>
+
+            {/* Desktop Resizer Handle */}
+            <div
+              className="hidden md:flex w-3 -ml-1.5 bg-transparent hover:bg-indigo-500/10 cursor-col-resize items-center justify-center z-30 absolute h-full"
+              style={{ left: `${splitRatio}%` }}
+              onMouseDown={startResizing}
+            >
+              <div className="h-8 w-1 bg-slate-700 rounded-full hover:bg-indigo-400 transition-colors" />
+            </div>
+
+            {/* Output Section */}
+            <div
+              style={{ width: `${100 - splitRatio}%` }}
+              className={`
                     bg-slate-950/50 min-h-0 
                     h-1/2 md:h-full w-full md:w-auto ml-auto
                 `}
-          >
-            {viewMode === 'batch' ? (
-              <BatchResults
-                items={batchItems}
-                activeModels={config.activeModels}
-                config={config}
-                onUpdateEvaluation={handleUpdateEvaluation}
-                onUpdateItem={handleUpdateItem}
-              />
-            ) : (
-              <OutputArea results={results} />
-            )}
+            >
+              {viewMode === 'batch' ? (
+                <BatchResults
+                  items={batchItems}
+                  activeModels={config.activeModels}
+                  config={config}
+                  onUpdateEvaluation={handleUpdateEvaluation}
+                  onUpdateItem={handleUpdateItem}
+                />
+              ) : (
+                <OutputArea results={results} isGenerating={isGenerating} />
+              )}
+            </div>
           </div>
-        </div>
-      </main>
+        </main>
+      </div>
     </div>
   );
 };
 
 export default App;
-
