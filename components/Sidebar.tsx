@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AppConfig, ModelType, ToneType, FormatType, HistoryItem, ViewMode } from '../types';
+import { AppConfig, DEFAULT_MODEL_OPTIONS, ToneType, FormatType, HistoryItem, ViewMode } from '../types';
 import HistoryPanel from './HistoryPanel';
 import RunConfigPanel from './RunConfigPanel';
 import { Settings2, Sliders, MessageSquare, Cpu, Server, Globe, History, Plus, X, Check, Tag, AlertCircle, FlaskConical, Layers, RefreshCw, ChevronDown, Target } from 'lucide-react';
@@ -843,7 +843,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                               type="text"
                               value={config.judgeModel}
                               onChange={(e) => handleChange('judgeModel', e.target.value)}
-                              placeholder="gpt-4o, claude-3-opus, llama-3-70b"
+                              placeholder="model-small, model-medium, model-large"
                               className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-md px-3 py-2 text-xs placeholder-slate-600"
                             />
                           </div>

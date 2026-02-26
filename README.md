@@ -1,49 +1,208 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# CiudadanIA
 
-# Run and deploy your AI Studio app
+A local-first summarization and evaluation workbench built with React + Vite (and optional Electron packaging).
 
-This contains everything you need to run your app locally.
+The app supports:
+- Interactive single-text summarization (Playground)
+- Batch processing from files (Workbench)
+- OpenAI-compatible endpoints (cloud or local)
+- Multi-configuration runs for side-by-side comparison
+- Automated rubric-based evaluation (“LLM as judge”)
 
-View your app in AI Studio: https://ai.studio/apps/drive/1WrUn2aF_qR7Fsh77R5voKJ3j0vELXN6S
+![Application screenshot](browser:/tmp/codex_browser_invocations/e8e2587e281fec53/artifacts/readme-screenshot.png)
 
+---
 
-## Run Locally
+## What it does
 
-**Prerequisites:**  Node.js (v18+)
+### 1) Playground mode
+Use a single input text and run one or more selected models in parallel.
 
-1. Install dependencies:
-   `npm install`
-2. Run the app:
-   `npm run dev`
+You can control:
+- System instruction
+- Temperature / top-p / output token limit
+- Tone and output format
+- Max words
+- Optional custom focus
 
-## Configuration
+The app generates one output per active model and displays results side-by-side.
 
-The application supports **Local LLMs** (via LM Studio) and **Cloud APIs** (OpenAI compatible).
+### 2) Workbench (batch) mode
+Process multiple records at once and compare custom run configurations.
 
-### Cloud API (BYOK)
-1. Select "Cloud API" in the sidebar.
-2. Enter your Base URL (e.g., `https://openrouter.ai/api/v1` or `https://api.openai.com/v1`).
-3. Enter your API Key.
-4. Click the Refresh icon to load available models.
+Batch inputs can be loaded from:
+- `.txt`
+- `.csv`
+- `.xlsx` / `.xls`
+- `.docx`
+- `.pdf`
 
-### Local LLM
-1. Run LM Studio and start the local server.
-2. Select "Local LLM" in the app sidebar.
-3. Ensure the endpoint matches (default: `http://localhost:1234/v1/chat/completions`).
+Each batch item tracks:
+- Processing status
+- Generated outputs per run configuration
+- Optional reference summary
+- Evaluation scores and notes
 
-## Features
+### 3) Evaluation (judge)
+Generated summaries can be graded using configurable weighted criteria (for example: accuracy, clarity, conciseness, completeness).
 
-### 🌍 Localization (i18n)
-The application fully supports **English** and **Spanish**.
-- The language is automatically detected based on system settings or can be configured in the code.
-- All UI elements, including headers, buttons, and status messages, are localized.
+Judge options:
+- Reuse the same generation model as judge
+- Or configure a separate judge endpoint/model
+- Optional reference summary comparison (gold standard)
 
-### ⚖️ LLM as a Judge
-Built-in evaluation framework to grade summaries:
-- **Configurable Criteria**: Define custom criteria (Accuracy, Conciseness, etc.) with weights.
-- **Batch Evaluation**: Run evaluation on multiple items automatically.
-- **Support**: Works with both Cloud/OpenAI-compatible and Local LLMs.
+Evaluation responses are parsed from strict JSON output and normalized to a 0–10 scale.
 
+### 4) UX and accessibility
+- English and Spanish localization
+- Resizable sidebar and split-pane layout
+- Keyboard skip link and ARIA labels in key UI sections
+- Toast notifications and loading skeletons
+
+---
+
+## Readiness review
+
+Current implementation checks:
+- Web workflow and batch workflow are both wired in `App.tsx` and `useBatchProcessor`.
+- OpenAI-compatible request handling includes endpoint normalization, retries, and structured error messages.
+- API keys are not persisted in history snapshots.
+- History data is stored in browser `localStorage` (source text + outputs), so sensitive data handling policy is still required.
+- PDF parsing currently uses an external CDN worker URL at runtime.
+
+## Architecture
+
+- **Frontend:** React 19 + TypeScript + Vite
+- **Styling:** Tailwind CSS
+- **Testing:** Vitest + Testing Library
+- **Desktop packaging (optional):** Electron + electron-builder
+
+Core modules:
+- `App.tsx`: main state orchestration (playground + workbench + history)
+- `components/`: UI panels and layout
+- `services/llmService.ts`: prompt building, endpoint normalization, API requests, evaluation
+- `src/hooks/useBatchProcessor.ts`: batch execution pipeline
+- `src/utils/requestQueue.ts`: retry with exponential backoff
+
+---
+
+## Getting started
+
+### Prerequisites
+- Node.js 18+
+- npm
+
+### Install
+```bash
+npm install
+```
+
+### Run (web)
+```bash
+npm run dev
+```
+
+### Build (web)
+```bash
+npm run build
+npm run preview
+```
+
+### Run tests
+```bash
+npm test
+```
+
+---
+
+## Endpoint configuration
+
+The app expects OpenAI-compatible APIs.
+
+### Cloud endpoint
+Provide:
+- Base URL (for example, ending in `/v1` or full `/chat/completions`)
+- API key
+
+### Local endpoint
+Provide:
+- Local server URL (default: `http://localhost:1234/v1/chat/completions`)
+
+The app normalizes common endpoint forms automatically (`/v1`, `/models`, `/chat/completions`) and handles model discovery via `/models` where available.
+
+---
+
+## Desktop build (optional)
+
+### Option A: Electron (already included in this repository)
+
+1. Run in desktop development mode:
+```bash
+npm run electron:dev
+```
+
+2. Build desktop artifacts:
+```bash
+npm run electron:build
+```
+
+This uses:
+- `electron/main.ts` (main process)
+- `electron/preload.ts` (preload bridge)
+- `electron-builder` packaging config in `package.json`
+
+### Option B: Similar desktop runtime (for example, Tauri)
+
+If you prefer a lighter runtime:
+1. Keep the current frontend build (`npm run build`).
+2. Create a Tauri shell and point it to the generated `dist/` folder.
+3. Move environment and endpoint configuration to Tauri-managed config files.
+4. Reapply the same privacy controls (no key persistence, local storage policy, trusted endpoints).
+
+The current codebase is frontend-first, so migrating to another shell mainly affects packaging and OS integration, not React components.
+
+---
+
+## Security and privacy notes
+
+If this repository is made public, consider the following operational safeguards:
+
+1. **API keys**
+   - API keys are entered by users at runtime.
+   - History snapshots now sanitize and avoid persisting API keys.
+
+2. **Local browser storage**
+   - Generation history (source text, outputs, settings snapshot) is stored in `localStorage` for convenience.
+   - Do not use real sensitive production text unless your policy allows browser-local persistence.
+
+3. **External dependency for PDF worker**
+   - PDF parsing currently uses a CDN-hosted PDF worker URL at runtime.
+   - In restricted environments, replace this with a locally hosted worker asset.
+
+4. **Client-side execution model**
+   - Requests are sent directly from the client UI to configured endpoints.
+   - Use trusted endpoints, HTTPS, and least-privilege API keys.
+
+5. **Electron distribution**
+   - Review desktop hardening settings and signing practices before production distribution.
+
+---
+
+## Maintainers and contributors
+
+If you want to continue or modify the project, read:
+- [`CONTINUATION_GUIDE.md`](CONTINUATION_GUIDE.md)
+
+This guide includes architecture handover, extension points, security assumptions, and an agent-agnostic workflow for future changes.
+
+---
+
+## Repository scripts
+
+- `npm run dev` — run Vite dev server
+- `npm run build` — build web assets
+- `npm run preview` — preview production build
+- `npm run test` — run Vitest suite
+- `npm run electron:dev` — run web + Electron in development
+- `npm run electron:build` — build Electron distribution
 

@@ -8,8 +8,8 @@ import Sidebar from './components/Sidebar';
 import InputArea from './components/InputArea';
 import OutputArea from './components/OutputArea';
 import BatchResults from './components/BatchResults';
-import { AppConfig, ModelType, ToneType, FormatType, HistoryItem, ViewMode, BatchItem } from './types';
-import { generateSummary, buildPrompt, evaluateSummary } from './services/llmService';
+import { AppConfig, ToneType, FormatType, HistoryItem, ViewMode, BatchItem } from './types';
+import { generateSummary, buildPrompt } from './services/llmService';
 import { PanelLeftOpen, PanelLeftClose } from 'lucide-react';
 import { useToast } from './src/hooks/useToast';
 import SkipLink from './src/components/SkipLink';
@@ -45,6 +45,11 @@ const DEFAULT_CONFIG: AppConfig = {
     { id: '4', name: 'COMPLETENESS', weight: 20, description: 'Does it cover all important points?' },
   ]
 };
+
+const sanitizeConfigForHistory = (config: AppConfig): AppConfig => ({
+  ...config,
+  cloudApiKey: ''
+});
 
 const App: React.FC = () => {
   const { t } = useTranslation();
@@ -158,7 +163,7 @@ const App: React.FC = () => {
         timestamp: Date.now(),
         sourceText: inputText,
         results: newResults, // Store the map
-        config: { ...config },
+        config: sanitizeConfigForHistory(config),
         durationMs: Date.now() - startTime
       };
 
@@ -205,7 +210,10 @@ const App: React.FC = () => {
   };
 
   const handleRestoreHistory = (item: HistoryItem) => {
-    setConfig(item.config);
+    setConfig(prev => ({
+      ...item.config,
+      cloudApiKey: item.config.cloudApiKey || prev.cloudApiKey
+    }));
     setInputText(item.sourceText);
     setResults(item.results);
   };

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AppConfig, RunConfiguration, ModelType, ToneType, FormatType } from '../types';
+import { AppConfig, RunConfiguration, DEFAULT_MODEL_OPTIONS, ToneType, FormatType } from '../types';
 import { Plus, Trash2, Copy, Settings, Check, X, ChevronDown, ChevronUp, Sliders } from 'lucide-react';
 
 interface RunConfigPanelProps {
@@ -22,7 +22,7 @@ const RunConfigPanel: React.FC<RunConfigPanelProps> = ({ config, setConfig, fetc
             id: crypto.randomUUID(),
             name: `${t('runConfig.name')} ${config.runConfigurations.length + 1}`,
             provider: config.provider,
-            model: config.activeModels[0] || ModelType.FLASH,
+            model: config.activeModels[0] || DEFAULT_MODEL_OPTIONS[0],
             systemInstruction: config.systemInstruction,
             temperature: config.temperature,
             topK: config.topK,
@@ -180,10 +180,10 @@ const RunConfigPanel: React.FC<RunConfigPanelProps> = ({ config, setConfig, fetc
                                         >
                                             <optgroup label="Available Models">
                                                 {fetchedModels.map(m => <option key={m} value={m}>{m}</option>)}
-                                                {!fetchedModels.length && Object.values(ModelType).map(m => <option key={m} value={m}>{m}</option>)}
+                                                {!fetchedModels.length && DEFAULT_MODEL_OPTIONS.map(m => <option key={m} value={m}>{m}</option>)}
                                             </optgroup>
                                             {/* Fallback for custom/manual entries */}
-                                            {!fetchedModels.includes(conf.model) && !Object.values(ModelType).includes(conf.model as any) && (
+                                            {!fetchedModels.includes(conf.model) && !DEFAULT_MODEL_OPTIONS.includes(conf.model as any) && (
                                                 <option value={conf.model}>{conf.model}</option>
                                             )}
                                         </select>
