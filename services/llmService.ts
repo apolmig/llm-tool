@@ -104,16 +104,9 @@ export const generateSummary = async (
             config.cloudEndpoint,
             config.cloudApiKey
         );
-    } else {
-        // Legacy Gemini fallback or Error
-        return generateGenericOpenAIRequest(
-            prompt,
-            config,
-            modelToUse,
-            config.cloudEndpoint || 'https://generativelanguage.googleapis.com/v1beta/openai/', // Fallback/Test
-            config.cloudApiKey || import.meta.env.VITE_GEMINI_API_KEY || ''
-        );
     }
+
+    throw new Error('Invalid provider configuration. Use cloud or local endpoints.');
 };
 
 /**

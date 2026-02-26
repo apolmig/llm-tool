@@ -1,14 +1,12 @@
 
-export enum ModelType {
-  FLASH = 'gemini-2.0-flash-exp',
-  PRO = 'gemini-1.5-pro',
-  GPT4O = 'openai/gpt-4o',
-  GPT4O_MINI = 'openai/gpt-4o-mini',
-  CLAUDE_3_5_SONNET = 'anthropic/claude-3.5-sonnet',
-  LLAMA_3_70B = 'meta-llama/llama-3-70b-instruct'
-}
+export const DEFAULT_MODEL_OPTIONS = [
+  'model-small',
+  'model-medium',
+  'model-large',
+  'model-reasoning'
+] as const;
 
-export type ModelProvider = 'gemini' | 'local' | 'cloud';
+export type ModelProvider = 'local' | 'cloud';
 
 export enum ToneType {
   PROFESSIONAL = 'Professional',
